@@ -1,2 +1,7 @@
 Set WshShell = CreateObject("WScript.Shell")
-WshShell.Run "cmd /c start_bot.bat", 0, False
+Set fso = CreateObject("Scripting.FileSystemObject")
+strPath = fso.GetParentFolderName(WScript.ScriptFullName)
+pythonExe = strPath & "\.venv\Scripts\pythonw.exe"
+scriptFile = strPath & "\telegram_bot.py"
+WshShell.CurrentDirectory = strPath
+WshShell.Run """" & pythonExe & """ """ & scriptFile & """", 0, False

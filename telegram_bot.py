@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import asyncio
 from datetime import datetime
 from dotenv import load_dotenv
@@ -33,6 +34,7 @@ from wolt_manager import (
     load_pantry_memory,
     save_pantry_memory,
     record_purchase_in_memory,
+    clear_pantry_memory,
     load_user_preferences,
     save_user_preferences,
     is_item_allowed,
@@ -41,12 +43,21 @@ from wolt_manager import (
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
-# Logging configuration
+# Persistent Log File Path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "telegram_bot.log")
+
+# Logging configuration (Rotating File + Optional Console)
+log_handlers = [RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")]
+if sys.stdout is not None:
+    log_handlers.append(logging.StreamHandler(sys.stdout))
+
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=logging.INFO,
+    handlers=log_handlers
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("TelegramBot")
 
 # Config
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -71,20 +82,29 @@ def auth_guard(func):
         user_id = update.effective_user.id if update.effective_user else 0
         if not is_authorized(user_id):
             logger.warning(f"Unauthorized access attempt by user ID: {user_id}")
-            if update.message:
-                await update.message.reply_text("⛔ Unauthorized. Your Telegram User ID is not allowed to control this bot.")
+            if update.effective_message:
+                await update.effective_message.reply_text("⛔ Unauthorized. Your Telegram User ID is not allowed to control this bot.")
             elif update.callback_query:
                 await update.callback_query.answer("⛔ Unauthorized.", show_alert=True)
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
 
+async def reply_safe(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Safely replies whether the trigger was a direct text command or an inline button callback."""
+    if update.callback_query and update.callback_query.message:
+        return await update.callback_query.message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    elif update.effective_message:
+        return await update.effective_message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    elif update.effective_chat:
+        return await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+
 @auth_guard
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message and interactive main menu."""
     user = update.effective_user
     welcome_text = (
-        f"👋 Hello {user.first_name}!\n\n"
+        f"👋 Hello {user.first_name if user else 'there'}!\n\n"
         "🛒 *Wolt Smart Pantry Bot* is active on your PC.\n\n"
         "Here is what you can do:\n"
         "• 📸 *Send a photo* of your fridge/pantry to audit stock\n"
@@ -93,7 +113,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/pantry` - View virtual pantry memory & long-term staples\n"
         "• `/deals` - Explore live discounts in Wolt Market Tallinn\n"
         "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6 Rukola:1`)\n"
-        "• `/help` - View usage guide & safety options"
+        "• `/logs` - View recent system and automation logs\n"
+        "• `/help` - View full usage guide & safety options"
     )
     keyboard = [
         [
@@ -109,7 +130,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=reply_markup)
+    await reply_safe(update, context, welcome_text, reply_markup=reply_markup)
 
 @auth_guard
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,14 +138,83 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📖 *Command Guide:*\n\n"
         "• `/plan` - Audits pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan with exact portions.\n"
+        "• `/pref` - Manage your allergies, disliked ingredients, and household size.\n"
         "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent purchase history.\n"
         "• `/deals` - Scans Wolt Market for active promotional discounts.\n"
         "• `/cart Item:Qty Item:Qty` - Adds specific items directly (e.g. `/cart Banaan:6 Rukola:1`).\n"
+        "• `/logs [lines]` - View live execution logs on your PC (default 20 lines).\n"
         "• `/clear_pantry` - Resets virtual pantry memory state.\n\n"
         "🛡️ *Safety Policy:*\n"
-        "By default, building a cart opens the review drawer on your PC without auto-charging your card. Automated payment only occurs if you explicitly select *Auto Pay*."
+        "By default, building a cart opens the review drawer on your PC and syncs to your phone app without auto-charging your card. Automated payment only occurs if you explicitly select *Auto Pay*."
     )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    await reply_safe(update, context, help_text)
+
+@auth_guard
+async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manages user dietary profile, allergies, and avoided ingredients."""
+    args = context.args if context.args else []
+    prefs = load_user_preferences()
+
+    if args:
+        subcmd = args[0].lower()
+        val = " ".join(args[1:])
+        
+        if subcmd in ["allergy", "allergies"]:
+            new_allergies = [a.strip() for a in val.split(",") if a.strip()]
+            prefs["allergies"] = new_allergies
+            save_user_preferences(prefs)
+            await reply_safe(update, context, f"✅ *Allergies Updated:* {', '.join(new_allergies) if new_allergies else 'None'}")
+            return
+        elif subcmd in ["avoid", "avoided", "dislike", "dislikes"]:
+            new_avoid = [a.strip() for a in val.split(",") if a.strip()]
+            prefs["avoided_ingredients"] = new_avoid
+            save_user_preferences(prefs)
+            await reply_safe(update, context, f"✅ *Avoided Foods Updated:* {', '.join(new_avoid) if new_avoid else 'None'}")
+            return
+        elif subcmd == "diet":
+            prefs["diet_type"] = val.strip().lower()
+            save_user_preferences(prefs)
+            await reply_safe(update, context, f"✅ *Diet Type Set To:* {val.strip().capitalize()}")
+            return
+        elif subcmd in ["people", "household", "size"]:
+            if val.strip().isdigit():
+                prefs["household_size"] = max(1, int(val.strip()))
+                save_user_preferences(prefs)
+                await reply_safe(update, context, f"✅ *Household Size Set To:* {prefs['household_size']} person(s)")
+                return
+        elif subcmd in ["reset", "clear"]:
+            prefs = {
+                "diet_type": "omnivore",
+                "allergies": [],
+                "avoided_ingredients": [],
+                "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+                "household_size": 1,
+                "notes": ""
+            }
+            save_user_preferences(prefs)
+            await reply_safe(update, context, "🔄 Dietary preferences reset to standard default.")
+            return
+
+    # Show current preferences
+    text = (
+        "👤 *Your Dietary Profile & Preferences:*\n\n"
+        f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
+        f"• *Household Size:* `{prefs.get('household_size', 1)} person(s)`\n"
+        f"• *Allergies:* `{', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}`\n"
+        f"• *Avoided Foods:* `{', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}`\n"
+        f"• *Preferred Proteins:* `{', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}`\n\n"
+        "💡 *How to update from Telegram:*\n"
+        "• `/pref allergy peanuts, shellfish, lactose`\n"
+        "• `/pref avoid pork, mushrooms, eggplant`\n"
+        "• `/pref diet high-protein` _(or pescatarian, vegetarian, vegan)_\n"
+        "• `/pref people 2`\n"
+        "• `/pref reset`"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📋 Generate Plan with Profile", callback_data="btn_plan")],
+        [InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref")]
+    ]
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def pantry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -157,12 +247,12 @@ async def pantry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📋 Plan Week Based on Memory", callback_data="btn_plan")],
         [InlineKeyboardButton("🗑️ Clear Memory", callback_data="btn_clear_pantry")]
     ]
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetches live deals from the default Wolt venue."""
-    msg = await update.message.reply_text("🔍 Scanning live discounts on Wolt Market Tallinn...")
+    msg = await reply_safe(update, context, "🔍 Scanning live discounts on Wolt Market Tallinn...")
     
     try:
         results = await asyncio.to_thread(
@@ -183,83 +273,20 @@ async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = "ℹ️ No promotional deal badges detected on the main store page right now."
     except Exception as e:
+        logger.error(f"Error scanning deals: {e}", exc_info=True)
         text = f"⚠️ Could not scan deals: {e}"
 
-    await msg.edit_text(text, parse_mode="Markdown")
-
-@auth_guard
-async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Manages user dietary profile, allergies, and avoided ingredients."""
-    args = context.args
-    prefs = load_user_preferences()
-
-    if args:
-        subcmd = args[0].lower()
-        val = " ".join(args[1:])
-        
-        if subcmd in ["allergy", "allergies"]:
-            new_allergies = [a.strip() for a in val.split(",") if a.strip()]
-            prefs["allergies"] = new_allergies
-            save_user_preferences(prefs)
-            await update.message.reply_text(f"✅ *Allergies Updated:* {', '.join(new_allergies) if new_allergies else 'None'}", parse_mode="Markdown")
-            return
-        elif subcmd in ["avoid", "avoided", "dislike", "dislikes"]:
-            new_avoid = [a.strip() for a in val.split(",") if a.strip()]
-            prefs["avoided_ingredients"] = new_avoid
-            save_user_preferences(prefs)
-            await update.message.reply_text(f"✅ *Avoided Foods Updated:* {', '.join(new_avoid) if new_avoid else 'None'}", parse_mode="Markdown")
-            return
-        elif subcmd == "diet":
-            prefs["diet_type"] = val.strip().lower()
-            save_user_preferences(prefs)
-            await update.message.reply_text(f"✅ *Diet Type Set To:* {val.strip().capitalize()}", parse_mode="Markdown")
-            return
-        elif subcmd in ["people", "household", "size"]:
-            if val.strip().isdigit():
-                prefs["household_size"] = max(1, int(val.strip()))
-                save_user_preferences(prefs)
-                await update.message.reply_text(f"✅ *Household Size Set To:* {prefs['household_size']} person(s)", parse_mode="Markdown")
-                return
-        elif subcmd in ["reset", "clear"]:
-            prefs = {
-                "diet_type": "omnivore",
-                "allergies": [],
-                "avoided_ingredients": [],
-                "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
-                "household_size": 1,
-                "notes": ""
-            }
-            save_user_preferences(prefs)
-            await update.message.reply_text("🔄 Dietary preferences reset to standard default.", parse_mode="Markdown")
-            return
-
-    # Show current preferences
-    text = (
-        "👤 *Your Dietary Profile & Preferences:*\n\n"
-        f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
-        f"• *Household Size:* `{prefs.get('household_size', 1)} person(s)`\n"
-        f"• *Allergies:* `{', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}`\n"
-        f"• *Avoided Foods:* `{', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}`\n"
-        f"• *Preferred Proteins:* `{', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}`\n\n"
-        "💡 *How to update from Telegram:*\n"
-        "• `/pref allergy peanuts, shellfish, lactose`\n"
-        "• `/pref avoid pork, mushrooms, eggplant`\n"
-        "• `/pref diet high-protein` _(or pescatarian, vegetarian, vegan)_\n"
-        "• `/pref people 2`\n"
-        "• `/pref reset`"
-    )
-    keyboard = [
-        [InlineKeyboardButton("📋 Generate Plan with Profile", callback_data="btn_plan")],
-        [InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref")]
-    ]
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    if msg:
+        await msg.edit_text(text, parse_mode="Markdown")
+    else:
+        await reply_safe(update, context, text)
 
 @auth_guard
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates a weekly meal plan and itemized grocery list customized for user preferences."""
-    msg = await update.message.reply_text("📐 Calculating 7-day meal plan based on your dietary profile, allergies & Wolt catalog...")
+    msg = await reply_safe(update, context, "📐 Calculating 7-day meal plan based on your dietary profile, allergies & Wolt catalog...")
     
-    user_id = update.effective_user.id
+    user_id = update.effective_user.id if update.effective_user else 0
     prefs = load_user_preferences()
     household_multiplier = prefs.get("household_size", 1)
     diet = prefs.get("diet_type", "omnivore").lower()
@@ -343,14 +370,17 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel_plan")
         ]
     ]
-    await msg.edit_text(plan_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    if msg:
+        await msg.edit_text(plan_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await reply_safe(update, context, plan_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Direct cart assembly command: /cart Item:Qty Item:Qty"""
-    args = context.args
+    args = context.args if context.args else []
     if not args:
-        await update.message.reply_text("Usage: `/cart Banaan:6 Rukola:1 Sibul:1`", parse_mode="Markdown")
+        await reply_safe(update, context, "Usage: `/cart Banaan:6 Rukola:1 Sibul:1`")
         return
 
     items = []
@@ -363,7 +393,7 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             items.append((it.strip(), 1))
 
-    msg = await update.message.reply_text(f"🛒 Launching browser automation for {len(items)} items...")
+    msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items...")
     
     try:
         await asyncio.to_thread(
@@ -388,15 +418,50 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "_(Or complete checkout in your PC browser window)._\n\n"
             "👇 Once placed, tap below to sync your virtual pantry memory:"
         )
-        await msg.edit_text(success_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        if msg:
+            await msg.edit_text(success_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await reply_safe(update, context, success_text, reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
-        await msg.edit_text(f"⚠️ Cart build failed: {e}")
+        logger.error(f"Cart build failed: {e}", exc_info=True)
+        if msg:
+            await msg.edit_text(f"⚠️ Cart build failed: {e}")
+        else:
+            await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+
+@auth_guard
+async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends the last N lines of the bot log file to Telegram for easy debugging."""
+    lines_count = 25
+    if context.args and context.args[0].isdigit():
+        lines_count = min(100, max(5, int(context.args[0])))
+
+    if not os.path.exists(LOG_FILE):
+        await reply_safe(update, context, "ℹ️ No log file found yet.")
+        return
+
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+            all_lines = f.readlines()
+        tail = "".join(all_lines[-lines_count:])
+        if not tail.strip():
+            tail = "Log file is currently empty."
+        
+        # Telegram max message length is 4096 chars
+        if len(tail) > 3800:
+            tail = tail[-3800:]
+            
+        await reply_safe(update, context, f"📜 *Live Logs (Last {lines_count} lines):*\n```\n{tail}\n```")
+    except Exception as e:
+        await reply_safe(update, context, f"⚠️ Error reading logs: {e}")
 
 @auth_guard
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles uploaded kitchen/fridge photos from Telegram."""
+    if not update.message or not update.message.photo:
+        return
     photo = update.message.photo[-1]
-    msg = await update.message.reply_text("📸 Photo received! Auditing kitchen stock & calculating meal gap...")
+    msg = await reply_safe(update, context, "📸 Photo received! Auditing kitchen stock & calculating meal gap...")
     
     # Save photo to local scratch directory
     os.makedirs("scratch", exist_ok=True)
@@ -412,9 +477,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles interactive inline keyboard button clicks."""
     query = update.callback_query
+    if not query:
+        return
     await query.answer()
     data = query.data
-    user_id = update.effective_user.id
+    user_id = update.effective_user.id if update.effective_user else 0
     wolt_url = f"https://wolt.com/en/{DEFAULT_COUNTRY}/{DEFAULT_CITY}/venue/{DEFAULT_STORE}"
 
     if data == "btn_plan":
@@ -423,6 +490,18 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await deals_command(update, context)
     elif data == "btn_pantry":
         await pantry_command(update, context)
+    elif data == "btn_pref":
+        await preferences_command(update, context)
+    elif data == "btn_reset_pref":
+        save_user_preferences({
+            "diet_type": "omnivore",
+            "allergies": [],
+            "avoided_ingredients": [],
+            "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+            "household_size": 1,
+            "notes": ""
+        })
+        await query.edit_message_text("🔄 Dietary preferences reset to standard default.")
     elif data == "btn_clear_pantry":
         clear_pantry_memory()
         await query.edit_message_text("🗑️ Virtual pantry memory has been reset.")
@@ -452,6 +531,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             )
             await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
+            logger.error(f"Error building sample cart: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_cart":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
@@ -479,6 +559,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             )
             await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
+            logger.error(f"Error building cart: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_autopay":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
@@ -496,44 +577,40 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             )
             await query.message.reply_text("✅ *Order Successfully Placed & Paid on Wolt!*\nPantry memory has been automatically updated for next week.")
         except Exception as e:
+            logger.error(f"Error during auto-pay: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error during auto-pay: {e}")
     elif data == "btn_record_last":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
         record_purchase_in_memory(items, store_slug=DEFAULT_STORE)
         await query.edit_message_text("💾 *Success!* Items have been recorded into your virtual pantry memory. Zero duplicate staples will be bought next week!")
-    elif data == "btn_pref":
-        await preferences_command(update, context)
-    elif data == "btn_reset_pref":
-        save_user_preferences({
-            "diet_type": "omnivore",
-            "allergies": [],
-            "avoided_ingredients": [],
-            "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
-            "household_size": 1,
-            "notes": ""
-        })
-        await query.edit_message_text("🔄 Dietary preferences reset to standard default.")
     elif data == "btn_cancel_plan":
         await query.edit_message_text("❌ Meal plan cancelled.")
+
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Logs uncaught exceptions and sends a helpful message to the user."""
+    logger.error("Exception while handling Telegram update:", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text(
+                f"⚠️ *An error occurred during execution:*\n`{context.error}`\n\nUse `/logs` to view detailed trace.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
 
 def main():
     """Main application entry point."""
     if not BOT_TOKEN:
-        print("\n" + "="*60)
-        print("❌ [ERROR] TELEGRAM_BOT_TOKEN is missing!")
-        print("1. Create a bot with @BotFather on Telegram.")
-        print("2. Copy your token into .env (or set TELEGRAM_BOT_TOKEN environment variable).")
-        print("="*60 + "\n")
+        logger.error("TELEGRAM_BOT_TOKEN is missing! Please configure .env.")
         sys.exit(1)
 
-    print("\n" + "="*60)
-    print("🤖 Wolt Smart Pantry Telegram Bot Starting...")
-    print(f"[*] Default Store: {DEFAULT_STORE} ({DEFAULT_CITY}, {DEFAULT_COUNTRY})")
+    logger.info("🤖 Wolt Smart Pantry Telegram Bot Starting...")
+    logger.info(f"[*] Default Store: {DEFAULT_STORE} ({DEFAULT_CITY}, {DEFAULT_COUNTRY})")
+    logger.info(f"[*] Log File: {LOG_FILE}")
     if ALLOWED_USERS:
-        print(f"[*] Access restricted to Telegram user ID(s): {ALLOWED_USERS}")
+        logger.info(f"[*] Access restricted to Telegram user ID(s): {ALLOWED_USERS}")
     else:
-        print("[!] Warning: TELEGRAM_ALLOWED_USERS is empty. Bot will accept commands from any user.")
-    print("="*60 + "\n")
+        logger.warning("[!] TELEGRAM_ALLOWED_USERS is empty. Bot will accept commands from any user.")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -546,11 +623,21 @@ def main():
     app.add_handler(CommandHandler("deals", deals_command))
     app.add_handler(CommandHandler("plan", plan_command))
     app.add_handler(CommandHandler("cart", cart_command))
+    app.add_handler(CommandHandler("logs", logs_command))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(button_callback_handler))
 
-    print("[+] Bot is online and listening for Telegram messages! Press Ctrl+C to stop.")
-    app.run_polling()
+    # Global error handler
+    app.add_error_handler(global_error_handler)
+
+    logger.info("Bot is online and listening for Telegram updates.")
+    try:
+        app.run_polling()
+    except Exception as e:
+        logger.exception(f"Fatal error in app.run_polling: {e}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.exception(f"Fatal crash on startup: {e}")
