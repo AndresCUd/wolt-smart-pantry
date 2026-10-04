@@ -26,8 +26,8 @@ DEFAULT_GROCERY_LIST = [
     ("Tallegg maisikattega", 1)
 ]
 
-# Verified weekly grocery list with real fresh meats and balanced produce
-FULL_GROCERY_LIST = [
+# Default sample grocery list for quick testing and demonstration
+SAMPLE_WEEKLY_GROCERY_LIST = [
     ("Rakvere kodune hakkliha", 2),      # 2x 400g = 800g fresh mixed beef/pork mince
     ("Tallegg maisikattega", 2),         # 2x 280g = 560g crispy corn chicken fillet
     ("Tallegg broileririnnafilee", 1),   # 1x 400g-500g fresh chicken breast fillet
@@ -441,26 +441,211 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
             except Exception:
                 pass
 
+def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn", country="est", address=None, output_file=None):
+    """Explores the Wolt store venue in real time to discover active deals and verify available products, prices, and package sizes."""
+    print(f"\n[*] 🔍 Exploring Wolt store venue: '{store_slug}' ({city}, {country})...")
+    
+    results = {
+        "store": store_slug,
+        "city": city,
+        "country": country,
+        "deals": [],
+        "queries": {}
+    }
+    
+    with sync_playwright() as p:
+        args = ["--disable-blink-features=AutomationControlled"]
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=USER_DATA_DIR,
+            headless=False,
+            args=args,
+            viewport={"width": 1280, "height": 850}
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+        
+        store_url = f"https://wolt.com/en/{country}/{city}/venue/{store_slug}"
+        print(f"[*] Navigating to: {store_url}")
+        page.goto(store_url, wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3.0)
+        close_any_unwanted_modal(page, target_address=address)
+
+        # 1. Discover active deals and promotional campaigns if requested
+        if get_deals:
+            print("[*] Scanning store for active deals and discounted items...")
+            try:
+                deal_cards = page.locator("main [data-test-id*='item-card'], main [data-test-id*='horizontal-item-card'], main [data-test-id*='vertical-item-card']").all()
+                for card in deal_cards[:25]:
+                    if card.is_visible(timeout=100):
+                        txt = card.inner_text() or ""
+                        # Detect discounted prices (contains multiple € amounts or discount badges)
+                        prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
+                        lines = [line.strip() for line in txt.split("\n") if line.strip()]
+                        if len(prices) >= 2 or any(w in txt.lower() for w in ["-%", "off", "deal", "ale", "soodus"]):
+                            title = lines[0] if lines else "Item"
+                            current_p = prices[0][0] or prices[0][1] if prices else ""
+                            orig_p = prices[1][0] or prices[1][1] if len(prices) > 1 else ""
+                            results["deals"].append({
+                                "title": title,
+                                "price": f"{current_p} €" if current_p else "",
+                                "original_price": f"{orig_p} €" if orig_p else "",
+                                "raw": txt.replace("\n", " | ")
+                            })
+                print(f"    -> Discovered {len(results['deals'])} discounted/promotional products on store front.")
+            except Exception as e:
+                print(f"    -> ⚠️ Could not extract deals: {e}")
+
+        # 2. Search specific product categories/queries
+        if queries:
+            store_search_input = get_store_search_input(page)
+            for query in queries:
+                print(f"[*] Verifying products for query: '{query}'...")
+                query_results = []
+                try:
+                    click_element_safely(store_search_input)
+                    store_search_input.fill("")
+                    store_search_input.press_sequentially(query, delay=25)
+                    store_search_input.press("Enter")
+                    time.sleep(2.2)
+                    close_any_unwanted_modal(page)
+
+                    product_card_selectors = [
+                        "main [data-test-id*='horizontal-item-card']",
+                        "main [data-test-id*='vertical-item-card']",
+                        "main [data-test-id*='item-card']",
+                        "main [data-test-id*='ItemCard']",
+                        "main [data-test-id*='product-card']",
+                        "main a[href*='/items/']",
+                        "[data-test-id*='horizontal-item-card']",
+                        "[data-test-id*='vertical-item-card']",
+                        "[data-test-id*='item-card']",
+                        "a[href*='/items/']"
+                    ]
+                    
+                    seen_titles = set()
+                    for sel in product_card_selectors:
+                        try:
+                            cards = page.locator(sel).all()
+                            for card in cards:
+                                if card.is_visible(timeout=150):
+                                    txt = card.inner_text() or ""
+                                    if any(bad in txt for bad in ["Discover", "W+ Weeks", "Deals", "Categories", "Halloween", "Everyday Low Prices", "Fight Food Waste"]):
+                                        continue
+                                    # Anti-cold-cut filter when searching for raw meats
+                                    if any(m in query.lower() for m in ["hakkliha", "broileri", "veise", "sea"]):
+                                        if any(bad_meat in txt.lower() for bad_meat in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "mortadella"]):
+                                            continue
+                                    
+                                    lines = [line.strip() for line in txt.split("\n") if line.strip() and "€" not in line]
+                                    title = lines[0] if lines else txt[:35]
+
+                                    if not title or title in seen_titles:
+                                        continue
+                                    seen_titles.add(title)
+
+                                    prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
+                                    current_p = prices[0][0] or prices[0][1] if prices else ""
+                                    orig_p = prices[1][0] or prices[1][1] if len(prices) > 1 else ""
+
+                                    query_results.append({
+                                        "title": title,
+                                        "price": f"{current_p} €" if current_p else "",
+                                        "original_price": f"{orig_p} €" if orig_p else "",
+                                        "details": txt.replace("\n", " | ")
+                                    })
+                                    if len(query_results) >= 5:
+                                        break
+                            if query_results:
+                                break
+                        except Exception:
+                            continue
+
+                    # Clear input
+                    try:
+                        clear_btn = page.locator("main button[aria-label*='Clear'], main button[aria-label*='Tühjenda']").first
+                        if clear_btn.is_visible(timeout=150):
+                            click_element_safely(clear_btn)
+                        elif store_search_input.is_visible(timeout=150):
+                            store_search_input.fill("")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    print(f"    -> ⚠️ Error searching query '{query}': {e}")
+
+                results["queries"][query] = query_results
+                print(f"    -> Found {len(query_results)} matching products for '{query}'.")
+
+        try:
+            context.close()
+        except Exception:
+            pass
+
+    # Save to file if specified
+    if output_file:
+        try:
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"\n[+] Inspection results saved to: {output_file}")
+        except Exception as e:
+            print(f"[!] Could not save output file: {e}")
+
+    # Output formatted JSON
+    print("\n" + "="*60)
+    print("📋 LIVE STORE INSPECTION RESULTS (JSON):")
+    print("="*60)
+    print(json.dumps(results, indent=2, ensure_ascii=False))
+    return results
+
 if __name__ == "__main__":
+    import json
+
     parser = argparse.ArgumentParser(description="Wolt Smart Shopping Automation Assistant")
-    parser.add_argument("mode", choices=["login", "add"], help="Mode: 'login' for one-time setup, 'add' to create cart")
+    parser.add_argument("mode", choices=["login", "search", "deals", "add"], help="Mode: 'login', 'search' (inspect catalog/verify items), 'deals' (find offers), 'add' (build cart)")
     parser.add_argument("--store", default="wolt-market-maakri", help="Wolt venue store slug")
     parser.add_argument("--city", default="tallinn", help="City name (default: tallinn)")
     parser.add_argument("--country", default="est", help="Country code (default: est)")
     parser.add_argument("--address", help="Optional delivery address filter")
-    parser.add_argument("--full", action="store_true", help="Run full weekly grocery list")
-    parser.add_argument("--items", nargs="+", help="Custom items list to purchase")
+    parser.add_argument("--queries", nargs="+", help="Queries to search/inspect in store (for 'search' mode)")
+    parser.add_argument("--sample", "--full", action="store_true", help="Run sample weekly grocery list")
+    parser.add_argument("--items", nargs="+", help="Custom items list in 'Item Name:Qty' or 'Item Name' format (e.g. 'Banaan:6' 'Rukola:1')")
+    parser.add_argument("--json-items", help="JSON string or path to JSON file with items list: [{'query': 'Banaan', 'qty': 6}]")
+    parser.add_argument("--output", help="Optional output JSON file path for search/deals results")
     
     args = parser.parse_args()
     
-    if args.items:
-        items = [(it, 1) for it in args.items]
-    elif args.full:
-        items = FULL_GROCERY_LIST
-    else:
-        items = DEFAULT_GROCERY_LIST
-    
     if args.mode == "login":
         login_mode()
+    elif args.mode == "deals":
+        inspect_store_items(args.store, queries=args.queries, get_deals=True, city=args.city, country=args.country, address=args.address, output_file=args.output)
+    elif args.mode == "search":
+        search_queries = args.queries or ["hakkliha", "broilerifilee", "banaan", "paprika", "rukola"]
+        inspect_store_items(args.store, queries=search_queries, get_deals=False, city=args.city, country=args.country, address=args.address, output_file=args.output)
     elif args.mode == "add":
+        items = []
+        if args.json_items:
+            try:
+                if os.path.exists(args.json_items):
+                    with open(args.json_items, "r", encoding="utf-8") as f:
+                        items = json.load(f)
+                else:
+                    items = json.loads(args.json_items)
+            except Exception as e:
+                print(f"[!] Error parsing JSON items: {e}")
+                sys.exit(1)
+        elif args.items:
+            for it in args.items:
+                if ":" in it:
+                    parts = it.rsplit(":", 1)
+                    name = parts[0].strip()
+                    try:
+                        qty = int(parts[1].strip())
+                    except ValueError:
+                        qty = 1
+                    items.append((name, qty))
+                else:
+                    items.append((it.strip(), 1))
+        elif args.sample:
+            items = SAMPLE_WEEKLY_GROCERY_LIST
+        else:
+            items = DEFAULT_GROCERY_LIST
+        
         add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address)

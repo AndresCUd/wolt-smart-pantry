@@ -1,85 +1,90 @@
 ---
 name: wolt-smart-pantry
 description: >-
-  Analyzes kitchen/pantry/fridge inventory images, calculates weekly meal plans and grocery lists
-  adhering to nutritional protein sizing and freshness shelf life rules, and automates cart creation
-  in Wolt (e.g. Wolt Market Maakri / Selver Tallinn). Use whenever the user shares fridge/pantry
-  photos, asks to plan weekly meals, or wants to order groceries on Wolt.
+  Analyzes kitchen, fridge, freezer, and pantry inventory photos or lists, inspects live Wolt store catalogs
+  and deals to verify available products and prices, calculates balanced weekly meal plans with cooking
+  shrinkage math and freshness scheduling, and automates cart creation on Wolt with exact item quantities.
 ---
 
 # Wolt Smart Pantry & Grocery Assistant
 
-This skill guides the agent in transforming kitchen inventory photos (fridge, freezer, pantry) into an optimized 7-day meal plan and executing automated cart creation on Wolt (Tallinn, Estonia).
+This skill enables the agent to audit any user's kitchen inventory, explore live store catalogs on Wolt to discover active promotions and in-stock items, dynamically compute required ingredients based on missing meal slots and thermal cooking shrinkage, and automatically assemble an exact grocery cart on Wolt.
 
 ---
 
-## 🛠️ System Overview & Architecture
+## 🛠️ System Overview & Core Workflow
 
-The workflow consists of three automated stages:
-
-1. **Visual Inventory & Stock Audit**: Inspect user-provided kitchen photos to identify in-stock proteins, carbohydrates, pantry staples, and frozen goods.
-2. **Nutritional & Shelf-Life Calculation**: Apply the rules in `GROCERY_PLANNING_RULES.md` to compute raw protein requirements (accounting for cooking shrinkage) and schedule consumption based on the freshness hierarchy.
-3. **Automated Wolt Cart Assembly**: Use the dedicated local Playwright script (`wolt_manager.py`) with persistent browser profiles to search and add the exact items and quantities without cloud IP blocking.
-
----
-
-## 📋 Step-by-Step Workflow
-
-### Step 1: Inventory & Stock Audit
-When the user uploads kitchen photos:
-* **Identify in-stock staples**: Flour, dry pasta, rice, oats, oil, spices, sauces, yeast, garlic. *(Rule: Do not repurchase staples that already exist).*
-* **Identify in-stock proteins**: Canned tuna, eggs, Greek yogurt, frozen seafood/meat.
-* **Identify missing meal slots**: A 7-day week requires 14 main meals (7 lunches + 7 dinners) and 7 breakfasts.
-
-### Step 2: Meal Planning & Protein Sizing
-Apply the mathematical standards from `GROCERY_PLANNING_RULES.md`:
-* **Raw meat shrinkage factor**: Raw meat reduces by ~25–35% when cooked.
-  $$\text{Raw Meat Needed} = \frac{\text{Target Cooked Portion}}{0.70}$$
-* **Portion targets**:
-  - ~250g–300g raw protein per single meal.
-  - ~500g–600g raw protein per double-portion meal prep (lunch + dinner).
-  - Total weekly raw protein needed: **~2.0 kg – 2.4 kg**.
-* **Freshness Matrix (Consumption Schedule)**:
-  - **Days 1–3 (High Perishability)**: Fresh minced meat (*Hakkliha*), fresh chicken breast (*Broilerifilee*), baby greens/arugula (*Rukola*).
-  - **Days 4–5 (Moderate Perishability)**: Bananas, avocados (fridge-paused ripening), toast bread, corn-coated chicken.
-  - **Days 6–7 (Long Shelf Life)**: Cherry plum tomatoes, red bell peppers, onions, pantry/freezer backup meals.
-
-### Step 3: Shopping List Mapping (Estonia / Wolt)
-Map ingredients to real Estonian store packaging and terms (e.g. Wolt Market Maakri / Selver):
-* **Real Minced Meat (NO Cold Cuts)**: `Rakvere kodune hakkliha` (400g) $\times 2$ (800g total).
-* **Corn-Coated Chicken**: `Tallegg maisikattega kanafilee` (280g) $\times 2$ (560g total).
-* **Fresh Chicken Breast**: `Tallegg broileririnnafilee` (400g–500g) $\times 1$.
-* **Produce by Weight vs Units**:
-  - `Banaan` $\times 6$ (~1.1 kg bananas for the week).
-  - `Sibul 1kg` / `Mugulsibul 1kg` (1 kg mesh bag).
-  - `Paprika punane` $\times 2$ (~400g red peppers).
-  - `Avokaado karbis` $\times 1$ (2-pack ready to eat).
-  - `Kirssploomtomat` $\times 1$ (punnet 250g–500g).
-  - `Rukola` $\times 1$ (box/bag 100g–125g).
-  - `Riivjuust mozzarella` $\times 1$ (150g–200g).
-  - `Eesti Pagar Tosta` $\times 1$ (500g).
-
-### Step 4: Executing Wolt Automation (`wolt_manager.py`)
-Run the local automation script:
-
-```bash
-# Full weekly grocery order
-./.venv/Scripts/python wolt_manager.py add --store wolt-market-maakri --full
-
-# Single item test
-./.venv/Scripts/python wolt_manager.py add --store wolt-market-maakri
-
-# Custom store / items
-./.venv/Scripts/python wolt_manager.py add --store selver-abc-liivalaia --items "Banaan" "Rukola"
+```mermaid
+flowchart TD
+    A["📸 1. Kitchen Inventory Audit\n(Identify dry staples, in-stock proteins & expiring produce)"] --> B["🔍 2. Live Store Inspection & Deals\n(Explore Wolt catalog, active discounts & real packaging)"]
+    B --> C["📐 3. Nutritional Sizing & Freshness Matrix\n(Apply thermal shrinkage math & schedule meals Days 1-7)"]
+    C --> D["🛒 4. Automated Cart Assembly\n(Execute wolt_manager.py add with exact quantities)"]
+    D --> E["✅ 5. Safe 1-Click User Checkout\n(Browser left open with order review ready)"]
 ```
 
-#### Key Automation Guarantees in `wolt_manager.py`:
-1. **Persistent Session**: Uses local profile `.wolt_profile` to bypass Google OAuth and bot-detection.
-2. **Auto-Dismiss Interceptors**:
-   - Rejects "Continue previous order" prompts to start from clean 0.00 €.
-   - Selects first address in "Where?" modal and closes dialogs cleanly.
-   - Auto-closes accidental "Edit address" modals.
-3. **Modal Stepper Quantity Adjustment**: Opens product modals directly and clicks the `+` stepper to set exact quantities (e.g., 2 packs, 6 bananas) before submitting.
-4. **Strict Meat Filtering**: Excludes cold cuts / sausages (*doktorivorst, keeduvorst, sink, viiner*) when searching for fresh meat.
-5. **Real-time Price Increment Verification**: Verifies cart total price increases in euros after every item.
-6. **Safe Checkout Policy**: Never clicks checkout/payment; leaves the cart open on screen for the user to review and finalize.
+---
+
+## 📋 Step-by-Step Instructions
+
+### Step 1: Dynamic Inventory & Stock Audit
+When the user shares kitchen photos (fridge, freezer, shelves, pantry) or text inventory:
+* **Identify in-stock pantry staples**: Flour, rice, dry pasta, oats, cooking oils, spices, sauces, garlic, leavening agents.
+  - *Rule*: Never repurchase staples that are already in stock.
+* **Identify existing proteins**:
+  - Fresh / chilled meats, poultry, or fish.
+  - Frozen meats, seafood, or frozen prepared meals.
+  - Shelf-stable proteins: canned tuna/salmon, canned/dry beans, chickpeas, lentils.
+  - Dairy & plant proteins: eggs, Greek yogurt, cottage cheese, tofu, tempeh.
+* **Identify existing fresh produce & perishability**: Check for open greens or ripe fruits that must be consumed on Day 1–2.
+* **Calculate meal slots covered by existing stock**:
+  - Example: If the user has eggs and oats, that covers 7 breakfasts. If they have canned tuna and dry pasta, that covers 2 lunches.
+
+### Step 2: Live Store Catalog & Deals Exploration
+Before finalizing product recommendations, inspect the target store venue in real time using `wolt_manager.py search` or `wolt_manager.py deals`:
+
+```bash
+# Discover live products, exact packaging weights, and current prices in the store:
+python wolt_manager.py search --store wolt-market-maakri --queries "hakkliha" "kanafilee" "banaan" "paprika" "rukola"
+
+# Or scan for active store discounts and promotional campaigns:
+python wolt_manager.py deals --store wolt-market-maakri
+```
+
+The script returns structured JSON detailing live in-stock products, exact packaging weights (e.g. 300g vs 400g vs 500g), prices (€), and price per kg.
+
+### Step 3: Nutritional Sizing, Deals Matching & Freshness Matrix
+Using the live store data and formulas from `GROCERY_PLANNING_RULES.md`:
+* **Calculate remaining meal slots**:
+  $$\text{Missing Main Meals} = (\text{Days} \times \text{Main Meals per Day}) - \text{Meals Covered by In-Stock Goods}$$
+* **Thermal Shrinkage Factor**: Raw meat and fish lose 20–35% mass during cooking:
+  $$\text{Raw Weight Needed} = \frac{\text{Target Cooked Portion}}{1 - \text{Shrinkage Rate}}$$
+  - **Poultry / Red Meat**: ~250g–300g raw per standard meal (~500g–600g for a 2-portion meal prep).
+  - **Fish & Seafood**: ~220g–260g raw per standard meal.
+  - **Vegetarian (Tofu / Eggs / Beans)**: 150g–200g tofu or 2–3 eggs per meal.
+* **Select Best Live In-Stock Items**: Prioritize items on promotion or with the best price-to-weight ratio discovered in Step 2.
+* **Freshness Hierarchy (7-Day Consumption Schedule)**:
+  - **Days 1–3 (Tier 1: High Perishability)**: Fresh raw minced meat, delicate leafy greens (arugula, spinach), fresh fish.
+  - **Days 4–5 (Tier 2: Moderate Shelf-Life)**: Coated/breaded poultry, dense fruit (bananas, refrigerated avocados), sandwich bread.
+  - **Days 6–7 (Tier 3 & 4: Hardy Produce & Pantry Backup)**: Thick-skinned vegetables (bell peppers, cherry plum tomatoes, onions, carrots) and pantry/freezer backup meals.
+
+### Step 4: Automated Wolt Cart Assembly
+Execute the cart creation automation with exact items and quantities:
+
+```bash
+# Add calculated items with explicit quantities:
+python wolt_manager.py add --store wolt-market-maakri --items "Rakvere homemade minced meat, 400g:2" "Banaan:6" "Rukola:1" "Paprika punane:2"
+
+# Or pass JSON format:
+python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\": \"Banaan\", \"qty\": 6}, {\"query\": \"Rakvere homemade minced meat, 400g\", \"qty\": 2}]"
+```
+
+---
+
+## 🛡️ Automation Guarantees & Safety Heuristics
+
+1. **Persistent Session (`.wolt_profile`)**: Retains authentication and address settings without cloud IP blocking or captcha walls.
+2. **Live Catalog Verification**: Inspects live store availability, eliminating guesswork or outdated hardcoded product names.
+3. **Modal Stepper Automation**: Adjusts quantities inside product modals using the `+` stepper button.
+4. **Cold-Cut Safety Filter**: Excludes processed sausages, bologna, and cold cuts when looking for real raw meats.
+5. **Real-Time Price Verification**: Confirms that the cart total in euros updates after each item.
+6. **Safe Checkout**: Leaves the browser open with the cart ready for the user to review. Never submits payment automatically.

@@ -77,22 +77,32 @@ python wolt_manager.py login
 
 ## 🛒 Usage
 
-### Run the Full Weekly Grocery Plan
+### 1. Live Store Catalog Exploration & Offers Inspection
+
+Discover available products, exact packaging weights, and live prices before ordering:
 
 ```bash
-python wolt_manager.py add --store wolt-market-maakri --full
+# Search specific categories or items in the store:
+python wolt_manager.py search --store wolt-market-maakri --queries "hakkliha" "kanafilee" "banaan" "paprika" "rukola"
+
+# Scan store for active discounts and promotional deals:
+python wolt_manager.py deals --store wolt-market-maakri
 ```
 
-### Add Custom Items
+### 2. Automated Cart Assembly
 
 ```bash
-python wolt_manager.py add --store wolt-market-maakri --items "Banaan" "Rakvere kodune hakkliha" "Rukola"
-```
+# Add custom items with explicit quantities (using 'Item:Qty' format):
+python wolt_manager.py add --store wolt-market-maakri --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
 
-### Order from a Different Store / Venue
+# Pass calculated shopping list via JSON:
+python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\": \"Banaan\", \"qty\": 6}, {\"query\": \"Riivjuust mozzarella\", \"qty\": 1}]"
 
-```bash
-python wolt_manager.py add --store selver-abc-liivalaia --city tallinn --country est --full
+# Run sample demonstration grocery plan:
+python wolt_manager.py add --store wolt-market-maakri --sample
+
+# Order from a different store or venue:
+python wolt_manager.py add --store selver-abc-liivalaia --city tallinn --country est --items "Banaan:4" "Rukola:1"
 ```
 
 ---
