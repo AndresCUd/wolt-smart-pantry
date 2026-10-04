@@ -29,6 +29,9 @@ from telegram.ext import (
     filters
 )
 
+import pytz
+from datetime import datetime, time
+
 # Import local Wolt automation modules
 from wolt_manager import (
     load_pantry_memory,
@@ -40,6 +43,10 @@ from wolt_manager import (
     is_item_allowed,
     inspect_store_items,
     add_items_to_cart,
+    load_meal_plan,
+    save_meal_plan,
+    get_day_menu_formatted,
+    generate_default_weekly_plan,
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
@@ -66,6 +73,12 @@ ALLOWED_USERS = [int(uid.strip()) for uid in ALLOWED_USERS_RAW.split(",") if uid
 DEFAULT_STORE = os.getenv("DEFAULT_STORE", "wolt-market-maakri")
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "tallinn")
 DEFAULT_COUNTRY = os.getenv("DEFAULT_COUNTRY", "est")
+TIMEZONE_STR = os.getenv("TIMEZONE", "Europe/Tallinn")
+try:
+    BOT_TIMEZONE = pytz.timezone(TIMEZONE_STR)
+except Exception:
+    BOT_TIMEZONE = pytz.timezone("Europe/Tallinn")
+DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 
 # Temporary in-memory session cache for pending shopping proposals per user
 user_pending_plans = {}
@@ -107,22 +120,29 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👋 Hello {user.first_name if user else 'there'}!\n\n"
         "🛒 *Wolt Smart Pantry Bot* is active on your PC.\n\n"
         "Here is what you can do:\n"
+        "• 🌅 `/today` (or `/menu`) - Check today's meals, chef tips & freshness status\n"
+        "• 📅 `/week` - Browse the full 7-day scheduled meal plan\n"
         "• 📸 *Send a photo* of your fridge/pantry to audit stock\n"
-        "• `/plan` - Generate a zero-waste 7-day meal plan & shopping list\n"
+        "• `/plan` - Generate zero-waste 7-day meal plan & shopping list\n"
         "• `/pref` - Configure allergies, avoided foods & diet type\n"
         "• `/pantry` - View virtual pantry memory & long-term staples\n"
         "• `/deals` - Explore live discounts in Wolt Market Tallinn\n"
         "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6 Rukola:1`)\n"
         "• `/logs` - View recent system and automation logs\n"
-        "• `/help` - View full usage guide & safety options"
+        "• `/help` - View full usage guide & safety options\n\n"
+        f"⏰ *Morning Schedule:* Daily menu arrives automatically at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone})."
     )
     keyboard = [
         [
-            InlineKeyboardButton("📋 Generate Meal Plan", callback_data="btn_plan"),
+            InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu"),
+            InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan")
+        ],
+        [
+            InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan"),
             InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals")
         ],
         [
-            InlineKeyboardButton("🏠 View Pantry Memory", callback_data="btn_pantry"),
+            InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry"),
             InlineKeyboardButton("👤 Dietary & Allergies", callback_data="btn_pref")
         ],
         [
@@ -137,17 +157,100 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Detailed command reference."""
     help_text = (
         "📖 *Command Guide:*\n\n"
+        "• `/today` (or `/menu`) - Today's breakfast/lunch/dinner, raw-to-cooked portions & freshness reminders.\n"
+        "• `/week` - 7-day full weekly meal schedule (Monday to Sunday).\n"
         "• `/plan` - Audits pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan with exact portions.\n"
         "• `/pref` - Manage your allergies, disliked ingredients, and household size.\n"
         "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent purchase history.\n"
         "• `/deals` - Scans Wolt Market for active promotional discounts.\n"
         "• `/cart Item:Qty Item:Qty` - Adds specific items directly (e.g. `/cart Banaan:6 Rukola:1`).\n"
-        "• `/logs [lines]` - View live execution logs on your PC (default 20 lines).\n"
+        "• `/logs [lines]` - View live execution logs on your PC (default 25 lines).\n"
         "• `/clear_pantry` - Resets virtual pantry memory state.\n\n"
+        f"⏰ *Automatic Morning Broadcast:* Every morning at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone}), your daily menu is delivered here automatically.\n\n"
         "🛡️ *Safety Policy:*\n"
         "By default, building a cart opens the review drawer on your PC and syncs to your phone app without auto-charging your card. Automated payment only occurs if you explicitly select *Auto Pay*."
     )
     await reply_safe(update, context, help_text)
+
+@auth_guard
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays today's scheduled meal plan, chef tips, portions, and freshness status."""
+    text, day_data = get_day_menu_formatted()
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Swap Today's Meal", callback_data="btn_swap_meal"),
+            InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan")
+        ],
+        [
+            InlineKeyboardButton("🛒 Wolt Grocery Plan", callback_data="btn_plan"),
+            InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await reply_safe(update, context, text, reply_markup=reply_markup)
+
+@auth_guard
+async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays the full 7-day meal plan breakdown."""
+    plan = load_meal_plan()
+    days = plan.get("days", [])
+    h_size = plan.get("household_size", 1)
+    
+    text = (
+        f"📅 *7-DAY SMART MEAL PLAN*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 *Household:* {h_size} person(s) | *Diet:* {plan.get('diet_type', 'Omnivore').capitalize()}\n\n"
+    )
+    for d in days:
+        text += (
+            f"📍 *{d.get('day_name', 'Day')}* — _{d.get('freshness_tier', 'Standard')}_\n"
+            f"• 🥗 *Lunch:* {d['lunch']['title']} ({d['lunch'].get('protein_raw', '')})\n"
+            f"• 🍲 *Dinner:* {d['dinner']['title']} ({d['dinner'].get('protein_raw', '')})\n"
+            f"• 🍎 *Snack:* {d['snack']['title']}\n"
+            f"• 💡 _{d.get('freshness_alert', '')}_\n\n"
+        )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu"),
+            InlineKeyboardButton("🛒 Build Wolt Cart", callback_data="btn_plan")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await reply_safe(update, context, text, reply_markup=reply_markup)
+
+async def daily_morning_menu_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled task that runs every morning around 09:00 to deliver today's meal plan."""
+    logger.info("🌅 Executing daily morning menu broadcast job...")
+    text, day_data = get_day_menu_formatted()
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Swap Today's Meal", callback_data="btn_swap_meal"),
+            InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan")
+        ],
+        [
+            InlineKeyboardButton("🛒 Wolt Grocery List", callback_data="btn_plan"),
+            InlineKeyboardButton("📦 Pantry Status", callback_data="btn_pantry")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    recipients = ALLOWED_USERS if ALLOWED_USERS else []
+    if not recipients:
+        logger.warning("No ALLOWED_USERS configured for morning menu broadcast.")
+        return
+        
+    for user_id in recipients:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=reply_markup
+            )
+            logger.info(f"Daily morning menu sent to Telegram user ID: {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to send daily menu to user ID {user_id}: {e}")
 
 @auth_guard
 async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -579,6 +682,30 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             logger.error(f"Error during auto-pay: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error during auto-pay: {e}")
+    elif data == "btn_today_menu":
+        await menu_command(update, context)
+    elif data == "btn_week_plan":
+        await week_command(update, context)
+    elif data == "btn_swap_meal":
+        plan = load_meal_plan()
+        days = plan.get("days", [])
+        now = datetime.now()
+        day_idx = min(6, max(0, now.weekday()))
+        if days and day_idx < len(days):
+            current_lunch = days[day_idx]["lunch"]["title"]
+            alternates = [
+                {"title": "Pan-Seared Salmon with Herb Rice", "tip": "Quick 12-min bake with lemon, dill & olive oil."},
+                {"title": "Crispy Garlic Chicken Breast & Broccoli", "tip": "High protein, pan-seared with garlic butter."},
+                {"title": "Lean Beef & Sweet Pepper Stir-Fry", "tip": "High heat sear with soy sauce & sesame oil."},
+                {"title": "Creamy Mozzarella & Tomato Passata Penne", "tip": "Italian comfort bowl with fresh basil."}
+            ]
+            alt = next((a for a in alternates if a["title"] != current_lunch), alternates[0])
+            days[day_idx]["lunch"]["title"] = alt["title"]
+            days[day_idx]["lunch"]["tip"] = alt["tip"]
+            save_meal_plan(plan)
+            await query.edit_message_text(f"🔄 *Meal Swapped for Today!*\n\n🥗 *New Lunch:* {alt['title']}\n💡 _{alt['tip']}_")
+        else:
+            await query.edit_message_text("🔄 Generated fresh meal plan variation.")
     elif data == "btn_record_last":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
         record_purchase_in_memory(items, store_slug=DEFAULT_STORE)
@@ -617,6 +744,9 @@ def main():
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("today", menu_command))
+    app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("preferences", preferences_command))
     app.add_handler(CommandHandler("pref", preferences_command))
     app.add_handler(CommandHandler("pantry", pantry_command))
@@ -629,6 +759,25 @@ def main():
 
     # Global error handler
     app.add_error_handler(global_error_handler)
+
+    # Schedule Daily 09:00 AM Morning Menu Broadcast
+    if app.job_queue:
+        hour, minute = 9, 0
+        try:
+            parts = DAILY_MENU_TIME.split(":")
+            hour, minute = int(parts[0]), int(parts[1])
+        except Exception:
+            pass
+        target_time = time(hour=hour, minute=minute, tzinfo=BOT_TIMEZONE)
+        app.job_queue.run_daily(
+            daily_morning_menu_job,
+            time=target_time,
+            days=(0, 1, 2, 3, 4, 5, 6),
+            name="daily_morning_menu"
+        )
+        logger.info(f"[*] Daily morning menu broadcast scheduled for {hour:02d}:{minute:02d} ({BOT_TIMEZONE.zone})")
+    else:
+        logger.warning("[!] Job queue not available. Morning broadcasts will not run.")
 
     logger.info("Bot is online and listening for Telegram updates.")
     try:
