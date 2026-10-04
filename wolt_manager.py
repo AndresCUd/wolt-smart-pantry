@@ -462,7 +462,7 @@ def search_and_add_item(page, query_text, target_qty=1):
     price_final = get_cart_total_price(page)
     return price_final > initial_cart_price or price_final > 0
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True):
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False):
     """Executes the automated grocery shopping flow for the given items."""
     print(f"\n[*] 🛒 Starting grocery order for venue: '{store_slug}' ({city}, {country})...")
     print(f"[*] Total items to process: {len(items)}\n")
@@ -545,11 +545,12 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         print(f"🎉 Completed: {added_count}/{len(items)} items processed. Final Cart Total: {final_price:.2f} €")
         print("="*60)
         
-        # Record purchased items into persistent pantry memory state
-        try:
-            record_purchase_in_memory(items, store_slug=store_slug)
-        except Exception as e:
-            print(f"[!] Warning: Could not record into pantry memory: {e}")
+        # Record purchased items into persistent pantry memory state if explicitly enabled
+        if record_memory:
+            try:
+                record_purchase_in_memory(items, store_slug=store_slug)
+            except Exception as e:
+                print(f"[!] Warning: Could not record into pantry memory: {e}")
 
         # Open order summary for user review
         try:
@@ -741,6 +742,7 @@ if __name__ == "__main__":
     parser.add_argument("--items", nargs="+", help="Custom items list in 'Item Name:Qty' or 'Item Name' format (e.g. 'Banaan:6' 'Rukola:1')")
     parser.add_argument("--json-items", help="JSON string or path to JSON file with items list: [{'query': 'Banaan', 'qty': 6}]")
     parser.add_argument("--output", help="Optional output JSON file path for search/deals results")
+    parser.add_argument("--record-memory", action="store_true", help="Automatically record items to virtual pantry memory state upon cart creation")
     
     args = parser.parse_args()
     
@@ -802,5 +804,5 @@ if __name__ == "__main__":
         else:
             items = DEFAULT_GROCERY_LIST
         
-        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address)
+        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=args.record_memory)
 

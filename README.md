@@ -12,13 +12,15 @@ An intelligent agentic grocery assistant and automation engine for **Wolt** (Tal
 
 1. 📸 **Visual Pantry & Fridge Audit**: Inspects photos of your fridge, freezer, and pantry to detect in-stock proteins, carbohydrates, and spices. Never repurchases items you already have.
 2. 🥩 **Nutritional Thermal Shrinkage Math**: Accounts for the standard 25–35% water/fat loss during cooking ($W_{\text{raw}} = \frac{W_{\text{cooked}}}{0.70}$), ensuring you buy adequate portions of genuine fresh meat (no cold cuts/mortadella).
-3. 🥗 **4-Tier Freshness Hierarchy**: Structures weekly meals according to ingredient shelf-life (Tier 1 perishables in Days 1–3, resilient produce and pantry staples in Days 4–7) to eliminate food waste.
-4. 🤖 **Robust Browser Automation**:
+4. ✋ **2 User Confirmation Checkpoints**:
+   - **Pre-Cart Checkpoint**: Always presents the proposed 7-day meal plan and itemized grocery list for user approval, swaps, or dietary adjustments *before* touching the browser cart.
+   - **Post-Checkout Checkpoint**: Confirms whether you finalized the order on Wolt before saving new items to your persistent pantry memory state, preventing fake/ghost items.
+5. 🤖 **Robust Browser Automation**:
    - Uses local persistent sessions (`.wolt_profile`) to bypass bot detection and OAuth friction.
    - Adjusts item quantities accurately using product modal steppers (`+` buttons).
    - Automatically handles address confirmation popups and dismisses "Continue previous order" prompts.
    - Real-time cart price increment verification in euros.
-5. 🛡️ **Safe Checkout Guarantee**: The engine builds the cart and displays the final order summary in an open browser window. It **never** clicks payment or submits orders automatically.
+6. 🛡️ **Safe Checkout Guarantee**: The engine builds the cart and displays the final order summary in an open browser window. It **never** clicks payment or submits orders automatically.
 
 ---
 
@@ -26,11 +28,12 @@ An intelligent agentic grocery assistant and automation engine for **Wolt** (Tal
 
 ```mermaid
 flowchart TD
-    A["📸 Fridge & Pantry Photos"] --> B["🤖 Vision Model Audit"]
-    B --> C["📐 Nutritional & Freshness Math\n(GROCERY_PLANNING_RULES.md)"]
-    C --> D["📋 Real Store Query Mapping\n(Wolt Market / Selver Tallinn)"]
-    D --> E["⚡ Local Playwright Engine\n(wolt_manager.py)"]
-    E --> F["🛒 Wolt Cart Filled with Exact Quantities\n(Open on screen for 1-click review)"]
+    A["📸 1. Inventory Audit (Photos / Memory)"] --> B["🔍 2. Live Wolt Store Exploration\n(wolt_manager.py search / deals)"]
+    B --> C["📐 3. Nutritional Sizing & Freshness Matrix"]
+    C --> D["✋ Checkpoint 1: User Meal Plan Approval\n(User confirms or adjusts meals & items)"]
+    D -->|Approved| E["⚡ 4. Playwright Cart Assembly\n(wolt_manager.py add)"]
+    E --> F["👀 5. Open Order Review in Browser"]
+    F --> G["✋ Checkpoint 2: Purchase Confirmation\n(User completes order -> Update pantry_memory.json)"]
 ```
 
 ---

@@ -8,7 +8,7 @@ description: >-
 
 # Wolt Smart Pantry & Grocery Assistant
 
-This skill enables the agent to audit any user's kitchen inventory, maintain persistent virtual pantry memory across weekly purchases (so users don't need to re-upload photos every week), explore live store catalogs on Wolt to discover active promotions and in-stock items, dynamically compute required ingredients based on missing meal slots and thermal cooking shrinkage, and automatically assemble an exact grocery cart on Wolt.
+This skill enables the agent to audit any user's kitchen inventory, maintain persistent virtual pantry memory across weekly purchases (so users don't need to re-upload photos every week), explore live store catalogs on Wolt to discover active promotions and in-stock items, dynamically compute required ingredients based on missing meal slots and thermal cooking shrinkage, present the meal plan and grocery list for user confirmation, and automatically assemble an exact grocery cart on Wolt.
 
 ---
 
@@ -21,9 +21,10 @@ flowchart TD
     
     B --> C["🔍 2. Live Store Inspection & Deals\n(Explore Wolt catalog, active discounts & real packaging)"]
     C --> D["📐 3. Nutritional Sizing & Freshness Matrix\n(Apply thermal shrinkage math & schedule meals Days 1-7)"]
-    D --> E["🛒 4. Automated Cart Assembly\n(Execute wolt_manager.py add with exact quantities)"]
-    E --> F["💾 5. Automatic Pantry Memory Update\n(Save purchased staples & decay weekly perishables)"]
-    F --> G["✅ 6. Safe 1-Click User Checkout\n(Browser left open with order review ready)"]
+    D --> E["✋ Checkpoint 1: User Meal Plan Confirmation\n(Present proposed plan & shopping list for user approval/swaps)"]
+    E -->|Approved| F["🛒 4. Automated Cart Assembly\n(Execute wolt_manager.py add with exact quantities)"]
+    F --> G["👀 5. Safe 1-Click User Checkout\n(Browser left open with order review ready)"]
+    G --> H["✋ Checkpoint 2: Purchase Confirmation\n(Ask user if order was placed -> Update pantry_memory.json)"]
 ```
 
 ---
@@ -59,7 +60,7 @@ python wolt_manager.py deals --store wolt-market-maakri
 
 The script returns structured JSON detailing live in-stock products, exact packaging weights (e.g. 300g vs 400g vs 500g), prices (€), and price per kg.
 
-### Step 3: Nutritional Sizing, Deals Matching & Freshness Matrix
+### Step 3: Nutritional Sizing & Freshness Matrix Calculation
 Using the live store data and formulas from `GROCERY_PLANNING_RULES.md`:
 * **Calculate remaining meal slots**:
   $$\text{Missing Main Meals} = (\text{Days} \times \text{Main Meals per Day}) - \text{Meals Covered by In-Stock / Memory Goods}$$
@@ -74,27 +75,43 @@ Using the live store data and formulas from `GROCERY_PLANNING_RULES.md`:
   - **Days 4–5 (Tier 2: Moderate Shelf-Life)**: Coated/breaded poultry, dense fruit (bananas, refrigerated avocados), sandwich bread.
   - **Days 6–7 (Tier 3 & 4: Hardy Produce & Pantry Backup)**: Thick-skinned vegetables (bell peppers, cherry plum tomatoes, onions, carrots) and pantry/freezer backup meals.
 
-### Step 4: Automated Wolt Cart Assembly & Memory Retention
-Execute the cart creation automation with exact items and quantities:
+### ✋ Checkpoint 1: Present Meal Plan & Shopping List for User Confirmation
+**CRITICAL RULE**: Always present the complete proposed 7-day meal plan and itemized shopping list to the user **before running the cart automation**:
+* Present each day's meals (Breakfast, Lunch, Dinner).
+* Present the itemized shopping list (Item Name, Store Brand/Package, Quantity, Estimated Price).
+* Ask the user: *"Would you like to make any changes to meals, swap any ingredients, or should I proceed to build this cart on Wolt?"*
+
+### Step 4: Automated Wolt Cart Assembly
+Once the user confirms or provides their adjustments, execute `wolt_manager.py add`:
 
 ```bash
-# Add calculated items with explicit quantities:
+# Add confirmed items with explicit quantities:
 python wolt_manager.py add --store wolt-market-maakri --items "Rakvere homemade minced meat, 400g:2" "Banaan:6" "Rukola:1" "Paprika punane:2"
 
 # Or pass JSON format:
 python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\": \"Banaan\", \"qty\": 6}, {\"query\": \"Rakvere homemade minced meat, 400g\", \"qty\": 2}]"
 ```
 
-*Note: `wolt_manager.py add` automatically saves all purchased items into `pantry_memory.json` upon cart completion, preserving your active stock for future weeks.*
+The browser opens on the user's screen with the final order review summary ready.
+
+### ✋ Checkpoint 2: Purchase Verification & Memory Persistence
+After the browser review is opened and the user interacts with Wolt:
+* Ask the user: *"Did you complete your order on Wolt? Let me know so I can record your new staples and proteins into your virtual pantry memory for next week."*
+* When the user confirms ("yes" / "done"):
+  ```bash
+  python wolt_manager.py pantry --action record --store wolt-market-maakri --items "Rakvere homemade minced meat, 400g:2" "Banaan:6" "Rukola:1" "Paprika punane:2"
+  ```
+  This ensures `pantry_memory.json` strictly contains real purchased items and prevents phantom/fake pantry stock.
 
 ---
 
 ## 🛡️ Automation Guarantees & Safety Heuristics
 
-1. **Persistent Pantry Memory (`pantry_memory.json`)**: Eliminates the need to take repetitive kitchen photos every single week.
-2. **Persistent Browser Session (`.wolt_profile`)**: Retains authentication and address settings without cloud IP blocking or captcha walls.
-3. **Live Catalog Verification**: Inspects live store availability, eliminating guesswork or outdated hardcoded product names.
-4. **Modal Stepper Automation**: Adjusts quantities inside product modals using the `+` stepper button.
-5. **Cold-Cut Safety Filter**: Excludes processed sausages, bologna, and cold cuts when looking for real raw meats.
-6. **Real-Time Price Verification**: Confirms that the cart total in euros updates after each item.
-7. **Safe Checkout**: Leaves the browser open with the cart ready for the user to review. Never submits payment automatically.
+1. **User Confirmation Checkpoints**: Never populates cart or commits virtual memory without user review and confirmation.
+2. **Persistent Pantry Memory (`pantry_memory.json`)**: Eliminates the need to take repetitive kitchen photos every single week.
+3. **Persistent Browser Session (`.wolt_profile`)**: Retains authentication and address settings without cloud IP blocking or captcha walls.
+4. **Live Catalog Verification**: Inspects live store availability, eliminating guesswork or outdated hardcoded product names.
+5. **Modal Stepper Automation**: Adjusts quantities inside product modals using the `+` stepper button.
+6. **Cold-Cut Safety Filter**: Excludes processed sausages, bologna, and cold cuts when looking for real raw meats.
+7. **Real-Time Price Verification**: Confirms that the cart total in euros updates after each item.
+8. **Safe Checkout Policy**: Never submits payment automatically.
