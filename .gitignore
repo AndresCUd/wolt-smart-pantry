@@ -4,9 +4,12 @@ venv/
 env/
 ENV/
 
-# Persistent Browser Sessions & Credentials (NEVER COMMIT)
+# Persistent Browser Sessions, Environment Secrets & Credentials (NEVER COMMIT)
 .wolt_profile/
 *.wolt_profile/
+.env
+*.env
+!.env.example
 
 # Python Cache & Bytecode
 __pycache__/

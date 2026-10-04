@@ -136,6 +136,41 @@ python wolt_manager.py pantry --action clear
 
 ---
 
+## 📱 Telegram Bot Setup (Order from your Phone)
+
+You can run `telegram_bot.py` on your computer to manage pantry inventory, upload fridge photos, generate meal plans, and trigger Wolt cart creation directly from Telegram on your phone.
+
+### 1. Configure Bot Token & Permissions
+1. Create a bot using [@BotFather](https://t.me/BotFather) on Telegram and copy the API Token.
+2. (Recommended) Get your Telegram User ID from [@userinfobot](https://t.me/userinfobot) to restrict bot access to only yourself.
+3. Copy `.env.example` to `.env` and fill in your details:
+   ```bash
+   cp .env.example .env
+   ```
+   ```env
+   TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ
+   TELEGRAM_ALLOWED_USERS=123456789
+   DEFAULT_STORE=wolt-market-maakri
+   ```
+
+### 2. Start the Telegram Bot on your PC
+```bash
+python telegram_bot.py
+```
+
+### 3. Telegram Commands & Capabilities
+- 📸 **Send any photo** of your fridge/pantry $\rightarrow$ Bot audits stock, proposes a 7-day meal plan, and shows `[🛒 Build Cart]` inline buttons.
+- `/plan` $\rightarrow$ Generates meal plan & shopping list based on memory and live Wolt deals.
+- `/pantry` $\rightarrow$ Shows active long-term staples and purchase history.
+- `/deals` $\rightarrow$ Scans live discounts in Wolt Market Tallinn.
+- `/cart Banaan:6 Rukola:1` $\rightarrow$ Builds cart directly from phone.
+- **Inline Keyboard Buttons**:
+  - `[🛒 Build Cart on Wolt (Safe)]`: Opens cart on PC without charging payment.
+  - `[💳 Auto Pay & Order]`: Executes 1-click automated payment submission.
+  - `[💾 Confirm Order Placed]`: Syncs items into `pantry_memory.json`.
+
+---
+
 ## 🧠 Installing as an Antigravity Agent Skill
 
 To use this with [Google Antigravity](https://github.com/google):
