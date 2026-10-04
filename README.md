@@ -101,8 +101,19 @@ python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\":
 # Run sample demonstration grocery plan:
 python wolt_manager.py add --store wolt-market-maakri --sample
 
-# Order from a different store or venue:
-python wolt_manager.py add --store selver-abc-liivalaia --city tallinn --country est --items "Banaan:4" "Rukola:1"
+### 3. Persistent Virtual Pantry Memory (No Photos Needed for Repeat Weeks)
+
+Track your active inventory across weekly orders so you don't need to re-photograph your pantry every week:
+
+```bash
+# View active tracked staples, fresh proteins, and purchase history:
+python wolt_manager.py pantry --action status
+
+# Manually record or update items in memory:
+python wolt_manager.py pantry --action record --items "Olive oil 1L:1" "Sibul 1kg:1"
+
+# Reset virtual memory state:
+python wolt_manager.py pantry --action clear
 ```
 
 ---

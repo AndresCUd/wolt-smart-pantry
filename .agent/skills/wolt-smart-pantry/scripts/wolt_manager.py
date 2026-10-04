@@ -20,6 +20,131 @@ from playwright.sync_api import sync_playwright
 # Persistent browser profile path (relative and portable)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USER_DATA_DIR = os.path.join(BASE_DIR, ".wolt_profile")
+PANTRY_MEMORY_FILE = os.path.join(BASE_DIR, "pantry_memory.json")
+
+def load_pantry_memory():
+    """Loads virtual pantry memory state from disk or creates an initial structure."""
+    if os.path.exists(PANTRY_MEMORY_FILE):
+        try:
+            with open(PANTRY_MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "last_updated": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "staples": [],
+        "proteins": [],
+        "produce": [],
+        "purchase_history": []
+    }
+
+def save_pantry_memory(data):
+    """Saves updated pantry memory to JSON file."""
+    import json
+    data["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with open(PANTRY_MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print(f"[💾] Pantry memory state saved: {PANTRY_MEMORY_FILE}")
+
+def record_purchase_in_memory(items, store_slug="wolt-market-maakri"):
+    """Records a completed grocery order into the persistent pantry memory state."""
+    data = load_pantry_memory()
+    now_str = time.strftime("%Y-%m-%dT%H:%M:%S")
+    
+    parsed_items = []
+    for it in items:
+        if isinstance(it, (tuple, list)):
+            name, qty = it[0], it[1]
+        elif isinstance(it, dict):
+            name, qty = it.get("query", it.get("name")), it.get("qty", 1)
+        else:
+            name, qty = str(it), 1
+        parsed_items.append({"name": name, "qty": qty})
+    
+    # Classify items into staples vs weekly perishables
+    for item in parsed_items:
+        name_lower = item["name"].lower()
+        if any(w in name_lower for w in ["sibul", "onion", "õli", "oil", "sool", "salt", "pipar", "pepper", "jahu", "flour", "riis", "rice", "pasta", "spagett", "kaste", "sauce", "küüslauk", "garlic", "pärm", "yeast"]):
+            # Long-term pantry staple
+            existing = next((s for s in data["staples"] if s["name"].lower() == item["name"].lower()), None)
+            if existing:
+                existing["qty"] = existing.get("qty", 1) + item["qty"]
+                existing["last_purchased"] = now_str
+            else:
+                data["staples"].append({
+                    "name": item["name"],
+                    "qty": item["qty"],
+                    "category": "long_term_staple",
+                    "last_purchased": now_str,
+                    "estimated_weeks": 4
+                })
+        elif any(w in name_lower for w in ["hakkliha", "kana", "broileri", "filee", "veis", "kala", "lõhe", "beef", "chicken", "meat", "pork", "tofu"]):
+            data["proteins"].append({
+                "name": item["name"],
+                "qty": item["qty"],
+                "category": "fresh_protein",
+                "purchased_at": now_str,
+                "shelf_life_days": 3 if "hakkliha" in name_lower else 5
+            })
+        else:
+            data["produce"].append({
+                "name": item["name"],
+                "qty": item["qty"],
+                "category": "produce_or_dairy",
+                "purchased_at": now_str,
+                "shelf_life_days": 7
+            })
+
+    data["purchase_history"].append({
+        "timestamp": now_str,
+        "store": store_slug,
+        "items": parsed_items
+    })
+    
+    save_pantry_memory(data)
+
+def display_pantry_memory():
+    """Outputs a human-readable and JSON summary of the virtual pantry state."""
+    data = load_pantry_memory()
+    print("\n" + "="*60)
+    print("🏠 VIRTUAL PANTRY & INVENTORY MEMORY")
+    print(f"Last Updated: {data.get('last_updated', 'Unknown')}")
+    print("="*60)
+    
+    print("\n📦 Active Long-Term Staples (Zero Repurchase Needed):")
+    if data.get("staples"):
+        for s in data["staples"]:
+            print(f"  - {s['name']} (Qty: {s.get('qty', 1)}, Est. remaining: ~{s.get('estimated_weeks', 4)} weeks)")
+    else:
+        print("  (No staples recorded)")
+
+    print("\n🥩 Tracked Proteins:")
+    if data.get("proteins"):
+        for p in data["proteins"]:
+            print(f"  - {p['name']} (Qty: {p.get('qty', 1)}, Shelf-life: ~{p.get('shelf_life_days', 4)} days)")
+    else:
+        print("  (None in stock)")
+
+    print("\n🥗 Tracked Produce & Dairy:")
+    if data.get("produce"):
+        for pr in data["produce"]:
+            print(f"  - {pr['name']} (Qty: {pr.get('qty', 1)})")
+    else:
+        print("  (None in stock)")
+
+    print(f"\n📜 Purchase History ({len(data.get('purchase_history', []))} orders recorded):")
+    for h in data.get("purchase_history", [])[-3:]:
+        print(f"  - [{h.get('timestamp')}] {h.get('store')}: {len(h.get('items', []))} items")
+    print("="*60 + "\n")
+    return data
+
+def clear_pantry_memory():
+    """Resets the virtual pantry state."""
+    if os.path.exists(PANTRY_MEMORY_FILE):
+        os.remove(PANTRY_MEMORY_FILE)
+        print("[+] Pantry memory reset successfully.")
+    else:
+        print("[*] Pantry memory is already empty.")
 
 # Default single-item test list
 DEFAULT_GROCERY_LIST = [
@@ -420,6 +545,12 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         print(f"🎉 Completed: {added_count}/{len(items)} items processed. Final Cart Total: {final_price:.2f} €")
         print("="*60)
         
+        # Record purchased items into persistent pantry memory state
+        try:
+            record_purchase_in_memory(items, store_slug=store_slug)
+        except Exception as e:
+            print(f"[!] Warning: Could not record into pantry memory: {e}")
+
         # Open order summary for user review
         try:
             view_order_btn = page.locator("button:has-text('View order'), button:has-text('Vaata tellimust'), button[aria-label*='View order']").first
@@ -599,7 +730,8 @@ if __name__ == "__main__":
     import json
 
     parser = argparse.ArgumentParser(description="Wolt Smart Shopping Automation Assistant")
-    parser.add_argument("mode", choices=["login", "search", "deals", "add"], help="Mode: 'login', 'search' (inspect catalog/verify items), 'deals' (find offers), 'add' (build cart)")
+    parser.add_argument("mode", choices=["login", "search", "deals", "add", "pantry"], help="Mode: 'login', 'search' (inspect catalog), 'deals' (offers), 'add' (build cart), 'pantry' (manage virtual stock)")
+    parser.add_argument("--action", choices=["status", "clear", "record"], default="status", help="Pantry action: 'status' (view inventory), 'clear' (reset), 'record' (save items)")
     parser.add_argument("--store", default="wolt-market-maakri", help="Wolt venue store slug")
     parser.add_argument("--city", default="tallinn", help="City name (default: tallinn)")
     parser.add_argument("--country", default="est", help="Country code (default: est)")
@@ -614,6 +746,28 @@ if __name__ == "__main__":
     
     if args.mode == "login":
         login_mode()
+    elif args.mode == "pantry":
+        if args.action == "status":
+            display_pantry_memory()
+        elif args.action == "clear":
+            clear_pantry_memory()
+        elif args.action == "record":
+            items_to_record = []
+            if args.items:
+                for it in args.items:
+                    if ":" in it:
+                        p_name, p_qty = it.rsplit(":", 1)
+                        items_to_record.append((p_name.strip(), int(p_qty.strip())))
+                    else:
+                        items_to_record.append((it.strip(), 1))
+            elif args.json_items:
+                if os.path.exists(args.json_items):
+                    with open(args.json_items, "r", encoding="utf-8") as f:
+                        items_to_record = json.load(f)
+                else:
+                    items_to_record = json.loads(args.json_items)
+            record_purchase_in_memory(items_to_record, store_slug=args.store)
+            display_pantry_memory()
     elif args.mode == "deals":
         inspect_store_items(args.store, queries=args.queries, get_deals=True, city=args.city, country=args.country, address=args.address, output_file=args.output)
     elif args.mode == "search":
@@ -649,3 +803,4 @@ if __name__ == "__main__":
             items = DEFAULT_GROCERY_LIST
         
         add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address)
+
