@@ -265,11 +265,19 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             record_memory=False,
             auto_pay=False
         )
+        wolt_url = f"https://wolt.com/en/{DEFAULT_COUNTRY}/{DEFAULT_CITY}/venue/{DEFAULT_STORE}"
         keyboard = [
-            [InlineKeyboardButton("💾 Record to Pantry Memory", callback_data="btn_record_last")]
+            [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+            [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
         ]
         user_pending_plans[update.effective_user.id] = items
-        await msg.edit_text("✅ *Cart Assembled!* Check your PC screen to review. Click below once order is placed:", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        success_text = (
+            "🎉 *Cart Ready & Synchronized!*\n\n"
+            "📲 *Wolt has synced your cart to your phone!* You can now open your **Wolt mobile app** on your phone to review your items and pay with Apple Pay / Google Pay in 1 tap.\n\n"
+            "_(Or complete checkout in your PC browser window)._\n\n"
+            "👇 Once placed, tap below to sync your virtual pantry memory:"
+        )
+        await msg.edit_text(success_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
         await msg.edit_text(f"⚠️ Cart build failed: {e}")
 
@@ -296,6 +304,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
+    wolt_url = f"https://wolt.com/en/{DEFAULT_COUNTRY}/{DEFAULT_CITY}/venue/{DEFAULT_STORE}"
 
     if data == "btn_plan":
         await plan_command(update, context)
@@ -321,13 +330,21 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 record_memory=False,
                 auto_pay=False
             )
-            keyboard = [[InlineKeyboardButton("💾 Confirm Order Placed", callback_data="btn_record_last")]]
-            await query.message.reply_text("✅ *Cart Assembled on PC!* Did you place the order on Wolt?", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard = [
+                [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+                [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
+            ]
+            sync_msg = (
+                "🎉 *Sample Cart Ready & Synchronized!*\n\n"
+                "📲 *Open your Wolt mobile app on your phone* to view your live synchronized basket and pay with 1 tap.\n\n"
+                "👇 Once you place the order, tap below to sync your pantry memory:"
+            )
+            await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_cart":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        await query.edit_message_text(f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your PC browser window.")
+        await query.edit_message_text(f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your PC browser or Wolt phone app.")
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
@@ -339,8 +356,17 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 record_memory=False,
                 auto_pay=False
             )
-            keyboard = [[InlineKeyboardButton("💾 Confirm Order Placed", callback_data="btn_record_last")]]
-            await query.message.reply_text("🎉 *Cart Ready on PC Screen!*\n\nReview your cart and click 'Order and pay' on Wolt. Once placed, tap below to sync memory:", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard = [
+                [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+                [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
+            ]
+            sync_msg = (
+                "🎉 *Cart Ready & Synchronized!*\n\n"
+                "📲 *Wolt has synced your cart to your phone!* You can now simply open your **Wolt mobile app** on your phone to review your items and pay with Apple Pay / Google Pay / Card in 1 tap!\n\n"
+                "_(Or complete it on your PC browser screen)._\n\n"
+                "👇 Once placed, tap below to update your virtual pantry memory:"
+            )
+            await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_autopay":
