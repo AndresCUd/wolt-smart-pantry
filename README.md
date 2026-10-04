@@ -104,10 +104,16 @@ python wolt_manager.py add --store wolt-market-maakri --items "Banaan:6" "Rakver
 python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\": \"Banaan\", \"qty\": 6}, {\"query\": \"Riivjuust mozzarella\", \"qty\": 1}]"
 ```
 
-#### Full Autonomous Mode (`--auto` / `-y`):
-Bypasses manual checkpoints and automatically commits memory in a single pass:
+#### Autonomous Cart Mode (`--auto` / `-y`):
+Bypasses manual meal checkpoints, builds cart, and updates memory, but **NEVER auto-charges payment**:
 ```bash
 python wolt_manager.py add --store wolt-market-maakri --auto --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
+```
+
+#### Automated Payment Submission (`--auto-pay` - Explicit Opt-In Only):
+If and only if you explicitly want the agent to submit payment and complete checkout:
+```bash
+python wolt_manager.py add --store wolt-market-maakri --auto-pay --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
 ```
 
 # Run sample demonstration grocery plan:

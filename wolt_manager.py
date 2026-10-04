@@ -462,7 +462,7 @@ def search_and_add_item(page, query_text, target_qty=1):
     price_final = get_cart_total_price(page)
     return price_final > initial_cart_price or price_final > 0
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False):
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False):
     """Executes the automated grocery shopping flow for the given items."""
     print(f"\n[*] 🛒 Starting grocery order for venue: '{store_slug}' ({city}, {country})...")
     print(f"[*] Total items to process: {len(items)}\n")
@@ -552,17 +552,57 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
             except Exception as e:
                 print(f"[!] Warning: Could not record into pantry memory: {e}")
 
-        # Open order summary for user review
+        # Open order summary for review or automated checkout
         try:
             view_order_btn = page.locator("button:has-text('View order'), button:has-text('Vaata tellimust'), button[aria-label*='View order']").first
             if view_order_btn.is_visible(timeout=2000):
                 click_element_safely(view_order_btn)
                 print("[+] Order review opened.")
+                time.sleep(1.5)
         except Exception:
             pass
+
+        if auto_pay:
+            print("\n" + "!"*60)
+            print("⚠️ [EXPLICIT OPT-IN ACTION] --auto-pay flag detected!")
+            print(">>> Proceeding to automated checkout and payment submission...")
+            print("!"*60 + "\n")
+            try:
+                # 1. Click "Go to checkout" / "Mine kassasse" / "Jätka"
+                checkout_btn = page.locator(
+                    "button:has-text('Go to checkout'), button:has-text('Mine kassasse'), button:has-text('Jätka'), button[data-test-id*='checkout-button'], button:has-text('Checkout')"
+                ).first
+                if checkout_btn.is_visible(timeout=3000):
+                    click_element_safely(checkout_btn)
+                    print("[+] Proceeding to final checkout payment screen...")
+                    time.sleep(3.5)
+
+                # 2. Click final "Order and pay" / "Telli ja maksa" submit button
+                submit_pay_btn = page.locator(
+                    "button:has-text('Order and pay'), button:has-text('Telli ja maksa'), button:has-text('Place order'), button[data-test-id*='submit-order'], button[data-test-id*='order-submit']"
+                ).first
+                if submit_pay_btn.is_visible(timeout=5000):
+                    click_element_safely(submit_pay_btn)
+                    print("[🎉] Final payment button clicked! Waiting for order confirmation...")
+                    time.sleep(5.0)
+                    print("[✅] Order submission completed successfully!")
+                    try:
+                        record_purchase_in_memory(items, store_slug=store_slug)
+                    except Exception:
+                        pass
+                else:
+                    print("[!] Notice: Final payment button requires manual verification/interaction on screen.")
+            except Exception as e:
+                print(f"[!] Error during auto-pay checkout: {e}")
+        else:
+            print("\n" + "="*60)
+            print("🛡️ [SAFE CHECKOUT POLICY]")
+            print("Cart is filled and ready on screen.")
+            print("To submit payment, click 'Order and pay' in the browser window.")
+            print("="*60 + "\n")
             
         if keep_open:
-            print("\n[+] Cart is ready in the browser. The process will terminate when you close the window.")
+            print("\n[+] The process will terminate when you close the browser window.")
             try:
                 page.wait_for_event("close", timeout=0)
             except Exception:
@@ -742,7 +782,8 @@ if __name__ == "__main__":
     parser.add_argument("--items", nargs="+", help="Custom items list in 'Item Name:Qty' or 'Item Name' format (e.g. 'Banaan:6' 'Rukola:1')")
     parser.add_argument("--json-items", help="JSON string or path to JSON file with items list: [{'query': 'Banaan', 'qty': 6}]")
     parser.add_argument("--output", help="Optional output JSON file path for search/deals results")
-    parser.add_argument("--auto", "-y", action="store_true", help="Full autonomous mode (automatically record memory without separate confirmation prompt)")
+    parser.add_argument("--auto", "-y", action="store_true", help="Full autonomous cart mode (automatically record memory upon cart assembly, does NOT submit payment)")
+    parser.add_argument("--auto-pay", action="store_true", help="EXPLICIT OPT-IN: Automatically submit checkout and payment on Wolt (requires explicit user specification)")
     parser.add_argument("--record-memory", action="store_true", help="Automatically record items to virtual pantry memory state upon cart creation")
     
     args = parser.parse_args()
@@ -805,5 +846,5 @@ if __name__ == "__main__":
         else:
             items = DEFAULT_GROCERY_LIST
         
-        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=(args.record_memory or args.auto))
+        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=(args.record_memory or args.auto or args.auto_pay), auto_pay=args.auto_pay)
 
