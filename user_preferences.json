@@ -1,0 +1,18 @@
+{
+  "diet_type": "high-protein",
+  "allergies": [
+    "peanuts",
+    "shellfish"
+  ],
+  "avoided_ingredients": [
+    "pork"
+  ],
+  "preferred_proteins": [
+    "chicken",
+    "ground beef",
+    "salmon",
+    "eggs"
+  ],
+  "household_size": 1,
+  "notes": ""
+}

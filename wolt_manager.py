@@ -21,6 +21,75 @@ from playwright.sync_api import sync_playwright
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 USER_DATA_DIR = os.path.join(BASE_DIR, ".wolt_profile")
 PANTRY_MEMORY_FILE = os.path.join(BASE_DIR, "pantry_memory.json")
+USER_PREFERENCES_FILE = os.path.join(BASE_DIR, "user_preferences.json")
+
+def load_user_preferences():
+    """Loads persistent user dietary preferences, allergies, and food avoidances."""
+    if os.path.exists(USER_PREFERENCES_FILE):
+        try:
+            with open(USER_PREFERENCES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "diet_type": "omnivore",
+        "allergies": [],
+        "avoided_ingredients": [],
+        "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+        "household_size": 1,
+        "notes": ""
+    }
+
+def save_user_preferences(prefs):
+    """Saves updated user dietary preferences and allergy profile to disk."""
+    import json
+    with open(USER_PREFERENCES_FILE, "w", encoding="utf-8") as f:
+        json.dump(prefs, f, indent=2, ensure_ascii=False)
+    print(f"[👤] User dietary preferences saved: {USER_PREFERENCES_FILE}")
+
+def is_item_allowed(item_name: str, prefs=None) -> tuple[bool, str]:
+    """Checks if an item violates any user allergies or food avoidance rules."""
+    if prefs is None:
+        prefs = load_user_preferences()
+    
+    item_lower = item_name.lower()
+    
+    # 1. Check allergies
+    for allergy in prefs.get("allergies", []):
+        if allergy.strip().lower() and allergy.strip().lower() in item_lower:
+            return False, f"Allergy violation: '{allergy}'"
+
+    # 2. Check avoided ingredients
+    for avoid in prefs.get("avoided_ingredients", []):
+        if avoid.strip().lower() and avoid.strip().lower() in item_lower:
+            return False, f"Avoided food: '{avoid}'"
+            
+    # 3. Check diet type exclusions
+    diet = prefs.get("diet_type", "omnivore").lower()
+    if diet in ["vegetarian", "vegan"]:
+        if any(meat in item_lower for meat in ["hakkliha", "kana", "broiler", "veis", "sea", "beef", "chicken", "pork", "meat", "kala", "salmon", "lõhe", "fish"]):
+            return False, f"Not compatible with {diet} diet"
+    elif diet == "pescatarian":
+        if any(meat in item_lower for meat in ["hakkliha", "kana", "broiler", "veis", "sea", "beef", "chicken", "pork", "meat"]):
+            return False, "Not compatible with pescatarian diet (poultry/red meat)"
+
+    return True, ""
+
+def display_user_preferences():
+    """Prints a formatted summary of the user's dietary preferences and allergies."""
+    prefs = load_user_preferences()
+    print("\n" + "="*60)
+    print("👤 USER DIETARY PROFILE & ALLERGY PREFERENCES")
+    print("="*60)
+    print(f"• Diet Type: {prefs.get('diet_type', 'omnivore').capitalize()}")
+    print(f"• Household Size: {prefs.get('household_size', 1)} person(s)")
+    print(f"• Allergies: {', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}")
+    print(f"• Avoided Foods: {', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}")
+    print(f"• Preferred Proteins: {', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}")
+    if prefs.get("notes"):
+        print(f"• Custom Notes: {prefs.get('notes')}")
+    print("="*60 + "\n")
+    return prefs
 
 def load_pantry_memory():
     """Loads virtual pantry memory state from disk or creates an initial structure."""
@@ -771,7 +840,7 @@ if __name__ == "__main__":
     import json
 
     parser = argparse.ArgumentParser(description="Wolt Smart Shopping Automation Assistant")
-    parser.add_argument("mode", choices=["login", "search", "deals", "add", "pantry"], help="Mode: 'login', 'search' (inspect catalog), 'deals' (offers), 'add' (build cart), 'pantry' (manage virtual stock)")
+    parser.add_argument("mode", choices=["login", "search", "deals", "add", "pantry", "preferences"], help="Mode: 'login', 'search', 'deals', 'add', 'pantry', 'preferences'")
     parser.add_argument("--action", choices=["status", "clear", "record"], default="status", help="Pantry action: 'status' (view inventory), 'clear' (reset), 'record' (save items)")
     parser.add_argument("--store", default="wolt-market-maakri", help="Wolt venue store slug")
     parser.add_argument("--city", default="tallinn", help="City name (default: tallinn)")
@@ -786,10 +855,39 @@ if __name__ == "__main__":
     parser.add_argument("--auto-pay", action="store_true", help="EXPLICIT OPT-IN: Automatically submit checkout and payment on Wolt (requires explicit user specification)")
     parser.add_argument("--record-memory", action="store_true", help="Automatically record items to virtual pantry memory state upon cart creation")
     
+    # User Preferences flags
+    parser.add_argument("--diet", help="Set dietary type (omnivore, pescatarian, vegetarian, vegan, keto, high-protein)")
+    parser.add_argument("--allergies", help="Comma-separated list of allergies (e.g. 'peanuts, shellfish, lactose')")
+    parser.add_argument("--avoid", help="Comma-separated list of avoided foods/dislikes (e.g. 'pork, mushrooms, eggplant')")
+    parser.add_argument("--people", "--household", type=int, help="Set household size (number of people)")
+    parser.add_argument("--notes", help="Custom dietary notes (e.g. 'lactose-free milk only')")
+    
     args = parser.parse_args()
     
     if args.mode == "login":
         login_mode()
+    elif args.mode == "preferences":
+        prefs = load_user_preferences()
+        changed = False
+        if args.diet:
+            prefs["diet_type"] = args.diet.strip().lower()
+            changed = True
+        if args.allergies:
+            prefs["allergies"] = [a.strip() for a in args.allergies.split(",") if a.strip()]
+            changed = True
+        if args.avoid:
+            prefs["avoided_ingredients"] = [a.strip() for a in args.avoid.split(",") if a.strip()]
+            changed = True
+        if args.people:
+            prefs["household_size"] = max(1, args.people)
+            changed = True
+        if args.notes:
+            prefs["notes"] = args.notes.strip()
+            changed = True
+            
+        if changed:
+            save_user_preferences(prefs)
+        display_user_preferences()
     elif args.mode == "pantry":
         if args.action == "status":
             display_pantry_memory()

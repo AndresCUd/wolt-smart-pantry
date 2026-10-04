@@ -33,6 +33,9 @@ from wolt_manager import (
     load_pantry_memory,
     save_pantry_memory,
     record_purchase_in_memory,
+    load_user_preferences,
+    save_user_preferences,
+    is_item_allowed,
     inspect_store_items,
     add_items_to_cart,
     SAMPLE_WEEKLY_GROCERY_LIST
@@ -86,6 +89,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Here is what you can do:\n"
         "• 📸 *Send a photo* of your fridge/pantry to audit stock\n"
         "• `/plan` - Generate a zero-waste 7-day meal plan & shopping list\n"
+        "• `/pref` - Configure allergies, avoided foods & diet type\n"
         "• `/pantry` - View virtual pantry memory & long-term staples\n"
         "• `/deals` - Explore live discounts in Wolt Market Tallinn\n"
         "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6 Rukola:1`)\n"
@@ -98,6 +102,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("🏠 View Pantry Memory", callback_data="btn_pantry"),
+            InlineKeyboardButton("👤 Dietary & Allergies", callback_data="btn_pref")
+        ],
+        [
             InlineKeyboardButton("🛒 Build Sample Cart", callback_data="btn_sample_cart")
         ]
     ]
@@ -181,47 +188,151 @@ async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(text, parse_mode="Markdown")
 
 @auth_guard
+async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manages user dietary profile, allergies, and avoided ingredients."""
+    args = context.args
+    prefs = load_user_preferences()
+
+    if args:
+        subcmd = args[0].lower()
+        val = " ".join(args[1:])
+        
+        if subcmd in ["allergy", "allergies"]:
+            new_allergies = [a.strip() for a in val.split(",") if a.strip()]
+            prefs["allergies"] = new_allergies
+            save_user_preferences(prefs)
+            await update.message.reply_text(f"✅ *Allergies Updated:* {', '.join(new_allergies) if new_allergies else 'None'}", parse_mode="Markdown")
+            return
+        elif subcmd in ["avoid", "avoided", "dislike", "dislikes"]:
+            new_avoid = [a.strip() for a in val.split(",") if a.strip()]
+            prefs["avoided_ingredients"] = new_avoid
+            save_user_preferences(prefs)
+            await update.message.reply_text(f"✅ *Avoided Foods Updated:* {', '.join(new_avoid) if new_avoid else 'None'}", parse_mode="Markdown")
+            return
+        elif subcmd == "diet":
+            prefs["diet_type"] = val.strip().lower()
+            save_user_preferences(prefs)
+            await update.message.reply_text(f"✅ *Diet Type Set To:* {val.strip().capitalize()}", parse_mode="Markdown")
+            return
+        elif subcmd in ["people", "household", "size"]:
+            if val.strip().isdigit():
+                prefs["household_size"] = max(1, int(val.strip()))
+                save_user_preferences(prefs)
+                await update.message.reply_text(f"✅ *Household Size Set To:* {prefs['household_size']} person(s)", parse_mode="Markdown")
+                return
+        elif subcmd in ["reset", "clear"]:
+            prefs = {
+                "diet_type": "omnivore",
+                "allergies": [],
+                "avoided_ingredients": [],
+                "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+                "household_size": 1,
+                "notes": ""
+            }
+            save_user_preferences(prefs)
+            await update.message.reply_text("🔄 Dietary preferences reset to standard default.", parse_mode="Markdown")
+            return
+
+    # Show current preferences
+    text = (
+        "👤 *Your Dietary Profile & Preferences:*\n\n"
+        f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
+        f"• *Household Size:* `{prefs.get('household_size', 1)} person(s)`\n"
+        f"• *Allergies:* `{', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}`\n"
+        f"• *Avoided Foods:* `{', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}`\n"
+        f"• *Preferred Proteins:* `{', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}`\n\n"
+        "💡 *How to update from Telegram:*\n"
+        "• `/pref allergy peanuts, shellfish, lactose`\n"
+        "• `/pref avoid pork, mushrooms, eggplant`\n"
+        "• `/pref diet high-protein` _(or pescatarian, vegetarian, vegan)_\n"
+        "• `/pref people 2`\n"
+        "• `/pref reset`"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📋 Generate Plan with Profile", callback_data="btn_plan")],
+        [InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref")]
+    ]
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generates a weekly meal plan and itemized grocery list for user approval."""
-    msg = await update.message.reply_text("📐 Calculating 7-day meal plan, checking pantry memory & inspecting Wolt catalog...")
+    """Generates a weekly meal plan and itemized grocery list customized for user preferences."""
+    msg = await update.message.reply_text("📐 Calculating 7-day meal plan based on your dietary profile, allergies & Wolt catalog...")
     
     user_id = update.effective_user.id
-    
-    # Standard verified weekly shopping proposal
-    proposal_items = [
-        ("Rakvere homemade minced meat, 400g", 2),
-        ("Tallegg maisikattega", 2),
-        ("Tallegg broileririnnafilee", 1),
-        ("Riivjuust mozzarella", 1),
-        ("Avokaado karbis 2tk, 300g", 1),
-        ("Kirssploomtomat", 1),
-        ("Rukola", 1),
-        ("Sibul 1kg", 1),
-        ("Eesti Pagar Tosta", 1),
-        ("Banaan", 6),
-        ("Paprika punane", 2)
-    ]
-    user_pending_plans[user_id] = proposal_items
+    prefs = load_user_preferences()
+    household_multiplier = prefs.get("household_size", 1)
+    diet = prefs.get("diet_type", "omnivore").lower()
+
+    # Candidate shopping list tailored by diet type
+    if diet in ["vegetarian", "vegan"]:
+        base_items = [
+            ("Tofu 300g", 2 * household_multiplier),
+            ("Riivjuust mozzarella", 1 * household_multiplier) if diet == "vegetarian" else ("Avokaado karbis 2tk, 300g", 1),
+            ("Avokaado karbis 2tk, 300g", 1),
+            ("Kirssploomtomat", 1),
+            ("Rukola", 1),
+            ("Sibul 1kg", 1),
+            ("Eesti Pagar Tosta", 1),
+            ("Banaan", 6 * household_multiplier),
+            ("Paprika punane", 2 * household_multiplier)
+        ]
+    elif diet == "pescatarian":
+        base_items = [
+            ("Lõhefilee", 2 * household_multiplier),
+            ("Valge kala filee", 1 * household_multiplier),
+            ("Riivjuust mozzarella", 1),
+            ("Avokaado karbis 2tk, 300g", 1),
+            ("Kirssploomtomat", 1),
+            ("Rukola", 1),
+            ("Sibul 1kg", 1),
+            ("Eesti Pagar Tosta", 1),
+            ("Banaan", 6 * household_multiplier),
+            ("Paprika punane", 2 * household_multiplier)
+        ]
+    else: # Omnivore / High-Protein
+        base_items = [
+            ("Rakvere homemade minced meat, 400g", 2 * household_multiplier),
+            ("Tallegg maisikattega", 2 * household_multiplier),
+            ("Tallegg broileririnnafilee", 1 * household_multiplier),
+            ("Riivjuust mozzarella", 1),
+            ("Avokaado karbis 2tk, 300g", 1),
+            ("Kirssploomtomat", 1),
+            ("Rukola", 1),
+            ("Sibul 1kg", 1),
+            ("Eesti Pagar Tosta", 1),
+            ("Banaan", 6 * household_multiplier),
+            ("Paprika punane", 2 * household_multiplier)
+        ]
+
+    # Filter out items that violate allergies or avoided foods
+    filtered_items = []
+    removed_items = []
+    for item_tuple in base_items:
+        allowed, reason = is_item_allowed(item_tuple[0], prefs)
+        if allowed:
+            filtered_items.append(item_tuple)
+        else:
+            removed_items.append((item_tuple[0], reason))
+
+    user_pending_plans[user_id] = filtered_items
 
     plan_text = (
-        "📋 *Proposed 7-Day Meal Plan (Zero Waste):*\n\n"
-        "• *Days 1–3 (Tier 1 Fresh):* Bolognese Pasta & Smash Burgers (Minced meat), Fresh Chicken Stir-Fry, Arugula Salad\n"
-        "• *Days 4–5 (Tier 2 Medium):* Crispy Corn Chicken & Toast, Avocados, Daily Bananas\n"
-        "• *Days 6–7 (Tier 3 Hardy):* Roasted Bell Peppers & Cherry Tomatoes with Mozzarella Bake\n\n"
-        "🛒 *Itemized Grocery List:* (Est. Total: ~28–34 €)\n"
-        "• `Rakvere homemade minced meat 400g` × 2 (800g protein)\n"
-        "• `Tallegg maisikattega` × 2 (560g chicken)\n"
-        "• `Tallegg broileririnnafilee` × 1 (450g breast)\n"
-        "• `Banaan` × 6 units (~1.1kg)\n"
-        "• `Avokaado karbis` × 1 box (2 ripe avocados)\n"
-        "• `Kirssploomtomat` × 1 punnet\n"
-        "• `Rukola` × 1 pack\n"
-        "• `Sibul 1kg` × 1 net bag\n"
-        "• `Riivjuust mozzarella` × 1 bag\n"
-        "• `Eesti Pagar Tosta` × 1 loaf\n"
-        "• `Paprika punane` × 2 units\n\n"
-        "✋ *Checkpoint 1:* Would you like to build this cart on Wolt?"
+        f"📋 *Proposed 7-Day Meal Plan ({diet.capitalize()} / {household_multiplier} person(s)):*\n\n"
+        "• *Days 1–3 (Tier 1 Fresh):* High-protein main meals, fresh poultry/meat or plant bowls, delicate arugula salad\n"
+        "• *Days 4–5 (Tier 2 Medium):* Coated cuts & toast, ripe avocados, daily bananas\n"
+        "• *Days 6–7 (Tier 3 Hardy):* Roasted bell peppers & cherry tomatoes with mozzarella bake\n\n"
+        "🛒 *Itemized Grocery List:*\n"
     )
+    for it_name, it_qty in filtered_items:
+        plan_text += f"• `{it_name}` × {it_qty}\n"
+
+    if removed_items:
+        plan_text += "\n🛡️ *Safety Exclusions Applied:*\n"
+        for r_name, r_reason in removed_items:
+            plan_text += f"• ~{r_name}~ _({r_reason})_\n"
+
+    plan_text += "\n✋ *Checkpoint 1:* Would you like to build this cart on Wolt?"
 
     keyboard = [
         [
@@ -390,6 +501,18 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
         record_purchase_in_memory(items, store_slug=DEFAULT_STORE)
         await query.edit_message_text("💾 *Success!* Items have been recorded into your virtual pantry memory. Zero duplicate staples will be bought next week!")
+    elif data == "btn_pref":
+        await preferences_command(update, context)
+    elif data == "btn_reset_pref":
+        save_user_preferences({
+            "diet_type": "omnivore",
+            "allergies": [],
+            "avoided_ingredients": [],
+            "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+            "household_size": 1,
+            "notes": ""
+        })
+        await query.edit_message_text("🔄 Dietary preferences reset to standard default.")
     elif data == "btn_cancel_plan":
         await query.edit_message_text("❌ Meal plan cancelled.")
 
@@ -417,6 +540,8 @@ def main():
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("preferences", preferences_command))
+    app.add_handler(CommandHandler("pref", preferences_command))
     app.add_handler(CommandHandler("pantry", pantry_command))
     app.add_handler(CommandHandler("deals", deals_command))
     app.add_handler(CommandHandler("plan", plan_command))
