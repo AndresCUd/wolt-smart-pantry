@@ -92,14 +92,23 @@ python wolt_manager.py search --store wolt-market-maakri --queries "hakkliha" "k
 python wolt_manager.py deals --store wolt-market-maakri
 ```
 
-### 2. Automated Cart Assembly
+### 2. Automated Cart Assembly & Autonomy Modes
 
+#### Supervised Mode (Standard):
+Builds the cart and leaves memory staging for your confirmation:
 ```bash
 # Add custom items with explicit quantities (using 'Item:Qty' format):
 python wolt_manager.py add --store wolt-market-maakri --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
 
 # Pass calculated shopping list via JSON:
 python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\": \"Banaan\", \"qty\": 6}, {\"query\": \"Riivjuust mozzarella\", \"qty\": 1}]"
+```
+
+#### Full Autonomous Mode (`--auto` / `-y`):
+Bypasses manual checkpoints and automatically commits memory in a single pass:
+```bash
+python wolt_manager.py add --store wolt-market-maakri --auto --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
+```
 
 # Run sample demonstration grocery plan:
 python wolt_manager.py add --store wolt-market-maakri --sample

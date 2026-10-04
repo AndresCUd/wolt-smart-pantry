@@ -742,6 +742,7 @@ if __name__ == "__main__":
     parser.add_argument("--items", nargs="+", help="Custom items list in 'Item Name:Qty' or 'Item Name' format (e.g. 'Banaan:6' 'Rukola:1')")
     parser.add_argument("--json-items", help="JSON string or path to JSON file with items list: [{'query': 'Banaan', 'qty': 6}]")
     parser.add_argument("--output", help="Optional output JSON file path for search/deals results")
+    parser.add_argument("--auto", "-y", action="store_true", help="Full autonomous mode (automatically record memory without separate confirmation prompt)")
     parser.add_argument("--record-memory", action="store_true", help="Automatically record items to virtual pantry memory state upon cart creation")
     
     args = parser.parse_args()
@@ -804,5 +805,5 @@ if __name__ == "__main__":
         else:
             items = DEFAULT_GROCERY_LIST
         
-        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=args.record_memory)
+        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=(args.record_memory or args.auto))
 
