@@ -1,0 +1,34 @@
+# Python Virtual Environment
+.venv/
+venv/
+env/
+ENV/
+
+# Persistent Browser Sessions & Credentials (NEVER COMMIT)
+.wolt_profile/
+*.wolt_profile/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Temporary Execution Artifacts & Dumps
+*.png
+*.jpg
+*.jpeg
+*.log
+debug_dom.py
+dump_catalog.py
+dump_dom_items.py
+get_meats.py
+get_meats_detail.py
+inspect_catalog.py
+wolt_*.json
+
+# Operating System & IDE Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
