@@ -11,6 +11,13 @@ ENV/
 *.env
 !.env.example
 
+# Personal Runtime State, Pantry Memory & Dietary Profiles (NEVER COMMIT)
+pantry_memory.json
+meal_plan.json
+user_preferences.json
+scratch/
+
+
 # Python Cache & Bytecode
 __pycache__/
 *.py[cod]
