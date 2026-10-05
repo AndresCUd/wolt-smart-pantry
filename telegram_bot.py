@@ -748,26 +748,36 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     dish_title = res.get("dish_title", "Cooked Meal")
     meal_type = res.get("meal_type", "breakfast").capitalize()
+    comp = res.get("composition", {})
     items = res.get("detected_items", [])
     macros = res.get("estimated_macros", {})
     notes = res.get("chef_notes", "")
     
-    items_text = ""
-    for it in items:
-        unit = f" {it.get('unit')}" if it.get('unit') else ""
-        items_text += f"• `{it.get('qty')}{unit} {it.get('name')}`\n"
+    comp_lines = []
+    if comp.get("proteins"):
+        comp_lines.append(f"• 🥩 *Proteins:* {', '.join(comp['proteins'])}")
+    if comp.get("carbs"):
+        comp_lines.append(f"• 🍞 *Carbs & Breads:* {', '.join(comp['carbs'])}")
+    if comp.get("produce"):
+        comp_lines.append(f"• 🥑 *Produce & Fresh:* {', '.join(comp['produce'])}")
+    if comp.get("dairy_and_fats"):
+        comp_lines.append(f"• 🧈 *Fats & Dairy:* {', '.join(comp['dairy_and_fats'])}")
         
+    comp_text = "\n".join(comp_lines) if comp_lines else "\n".join([f"• `{it.get('qty')} {it.get('name')}`" for it in items])
+    
     text = (
-        f"📸 *Visual Food Recognition & Stock Audit*\n"
+        f"📸 *Real Meal Composition & Visual Audit (Gemini Vision)*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🍽️ *Identified Meal:* **{dish_title}**\n"
+        f"🍽️ *Identified Dish:* **{dish_title}**\n"
         f"🕒 *Meal Category:* `{meal_type}`\n\n"
-        f"⚖️ *Ingredients & Quantities Detected:*\n"
-        f"{items_text}\n"
-        f"🔥 *Nutrition:* ~{macros.get('calories', 450)} kcal | {macros.get('protein_g', 22)}g Protein\n"
+        f"🔍 *Visual Composition Detected:*\n"
+        f"{comp_text}\n\n"
+        f"📊 *Estimated Nutrition & Macros:*\n"
+        f"🔥 **Calories:** ~{macros.get('calories', 480)} kcal\n"
+        f"🥩 **Protein:** ~{macros.get('protein_g', 24)}g | 🍞 **Carbs:** ~{macros.get('carbs_g', 32)}g | 🥑 **Fat:** ~{macros.get('fat_g', 28)}g\n"
     )
     if notes:
-        text += f"\n💡 _{notes}_\n"
+        text += f"\n👨‍🍳 *Chef Visual Notes:*\n_{notes}_\n"
         
     text += "\n👇 *Tap below to confirm and deduct what was actually eaten from your pantry:*"
     
@@ -781,7 +791,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🍲 Dinner", callback_data="btn_photo_type_dinner")
         ],
         [
-            InlineKeyboardButton("📦 Audit Pantry Stock (Pantry Photo)", callback_data="btn_plan"),
+            InlineKeyboardButton("👨‍🍳 Generate AI Recipe For This", callback_data="btn_recipe_lunch"),
             InlineKeyboardButton("❌ Discard", callback_data="btn_cancel_photo")
         ]
     ]

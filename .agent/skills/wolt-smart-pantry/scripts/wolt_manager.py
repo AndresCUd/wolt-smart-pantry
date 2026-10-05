@@ -573,6 +573,10 @@ def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = N
     """Generates an award-winning chef recipe using Gemini 3.8 Flash based on in-stock ingredients & preferences."""
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        api_key = os.getenv("GEMINI_API_KEY", "")
     if prefs is None:
         prefs = load_user_preferences()
         
@@ -583,10 +587,11 @@ def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = N
     h_size = prefs.get("household_size", 1)
 
     if api_key:
-        try:
-            from google import genai
-            client = genai.Client(api_key=api_key)
-            prompt = f"""
+        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key)
+                prompt = f"""
 You are an award-winning private chef.
 Create a practical, gourmet step-by-step recipe for '{dish_name}' serving {h_size} person(s).
 
@@ -612,15 +617,15 @@ Format your response in clean GitHub Markdown for Telegram mobile chat:
 🥗 *Plating & Serving Suggestion:*
 (Short appetizing presentation tip)
 """
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt
-            )
-            resp_text = response.text if hasattr(response, "text") else str(response)
-            if resp_text and resp_text.strip():
-                return resp_text.strip()
-        except Exception as e:
-            print(f"[!] Gemini recipe generation error: {e}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                resp_text = response.text if hasattr(response, "text") else str(response)
+                if resp_text and resp_text.strip():
+                    return resp_text.strip()
+            except Exception as e:
+                print(f"[!] Gemini recipe error with {model_name}: {e}")
 
     # Fallback recipe template if no API key
     return (
@@ -643,31 +648,37 @@ def analyze_photo_with_vision(image_path: str, api_key: str = None) -> dict:
     """Analyzes a food or kitchen photo using Gemini Multimodal Vision (gemini-3.8-flash) or intelligent fallback."""
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        api_key = os.getenv("GEMINI_API_KEY", "")
         
     if api_key:
-        try:
-            from google import genai
-            from PIL import Image
-            
-            client = genai.Client(api_key=api_key)
-            pil_img = Image.open(image_path)
-            
-            prompt = """
-You are an expert culinary vision AI and smart pantry inventory auditor.
-Analyze the given image carefully.
+        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+            try:
+                from google import genai
+                from PIL import Image
+                
+                client = genai.Client(api_key=api_key)
+                pil_img = Image.open(image_path)
+                
+                prompt = """
+You are an expert culinary vision AI, nutritionist, and smart pantry inventory auditor.
+Analyze the provided food photo with high precision.
 
 Determine:
-1. Is this a cooked meal (breakfast, lunch, dinner, snack), a pantry/fridge stock audit photo, or a receipt?
-2. If it is a cooked meal:
-   - Identify the meal type (breakfast, lunch, dinner, snack).
-   - What is the descriptive dish title?
-   - Identify every single ingredient visible on the plate with EXACT unit counts or weights. For example:
-     - 1 fried egg (do NOT assume 2 or 3 if only 1 is on the plate)
-     - 2 slices of toast bread
-     - 1/2 avocado (sliced or mashed)
-     - 2-3 strips of crispy bacon
-     - chicken fillet / minced beef (estimated cooked & raw weight)
-   - Note down estimated calories and protein grams.
+1. Is this a cooked meal plate (breakfast, lunch, dinner, snack), a pantry/fridge audit photo, or a receipt?
+2. If it is a cooked meal plate:
+   - Identify the meal type: breakfast, lunch, dinner, or snack.
+   - Descriptive gourmet dish title.
+   - Categorized composition breakdown:
+     - proteins: exact list of proteins detected (e.g. 1 Sunny-side-up egg, 3 bacon strips, 180g chicken breast)
+     - carbs: exact list of carbs/grains/breads (e.g. 2 slices toasted bread, 180g cooked basmati rice, pasta)
+     - produce: exact list of fresh fruits, vegetables & herbs (e.g. 1/2 sliced ripe avocado, cherry tomatoes, arugula)
+     - dairy_and_fats: cheeses, yogurt, butter, oils, or dressings
+   - Itemized list for pantry stock deduction (e.g. [{"name": "Farm Eggs", "qty": 1, "unit": "egg", "category": "egg"}, {"name": "Toast Bread", "qty": 2, "unit": "slice", "category": "bread"}, {"name": "Fresh Avocado", "qty": 0.5, "unit": "avocado", "category": "avocado"}, {"name": "Crispy Bacon", "qty": 3, "unit": "strips", "category": "bacon"}])
+   - Nutritional macro estimates: calories (kcal), protein_g (g), carbs_g (g), fat_g (g).
+   - Chef visual observation notes (cooking degree, crust, yolk runny/set, garnishes).
 
 Respond ONLY with a valid JSON object matching this schema:
 {
@@ -675,29 +686,40 @@ Respond ONLY with a valid JSON object matching this schema:
   "type": "cooked_meal",
   "meal_type": "breakfast",
   "dish_title": "Fried Egg on Toast with Sliced Avocado & Crispy Bacon",
+  "composition": {
+    "proteins": ["1 Sunny-side-up Fried Egg (~60g)", "3 Crispy Bacon Strips (~45g)"],
+    "carbs": ["2 Slices Golden Toasted Bread (~70g)"],
+    "produce": ["1/2 Ripe Avocado, sliced (~75g)"],
+    "dairy_and_fats": ["~10g Butter / Pan-frying Oil"]
+  },
   "detected_items": [
     {"name": "Farm Eggs", "qty": 1, "unit": "egg", "category": "egg"},
     {"name": "Toast Bread", "qty": 2, "unit": "slice", "category": "bread"},
     {"name": "Fresh Avocado", "qty": 0.5, "unit": "avocado", "category": "avocado"},
     {"name": "Crispy Bacon", "qty": 3, "unit": "strips", "category": "bacon"}
   ],
-  "estimated_macros": {"protein_g": 24, "calories": 480},
+  "estimated_macros": {
+    "calories": 480,
+    "protein_g": 24,
+    "carbs_g": 32,
+    "fat_g": 28
+  },
   "confidence": "high",
-  "chef_notes": "1 sunny-side-up egg on toasted bread, 1 extra toast slice, sliced avocado and crispy pan-fried bacon."
+  "chef_notes": "Sunny-side-up fried egg with golden lace edges and runny yolk served over toasted bread, with a second slice of toast, sliced ripe avocado, and pan-crisped bacon strips."
 }
 """
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=[pil_img, prompt]
-            )
-            resp_text = response.text if hasattr(response, "text") else str(response)
-            match = re.search(r'\{.*\}', resp_text, re.DOTALL)
-            if match:
-                data = json.loads(match.group(0))
-                data["status"] = "success"
-                return data
-        except Exception as e:
-            print(f"[!] Gemini Vision analysis error: {e}")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[pil_img, prompt]
+                )
+                resp_text = response.text if hasattr(response, "text") else str(response)
+                match = re.search(r'\{.*\}', resp_text, re.DOTALL)
+                if match:
+                    data = json.loads(match.group(0))
+                    data["status"] = "success"
+                    return data
+            except Exception as e:
+                print(f"[!] Gemini Vision error with {model_name}: {e}")
             
     # Fallback heuristic if no API key or API call failed
     return {
@@ -705,13 +727,25 @@ Respond ONLY with a valid JSON object matching this schema:
         "type": "cooked_meal",
         "meal_type": "breakfast",
         "dish_title": "Fried Egg on Toast with Sliced Avocado & Crispy Bacon",
+        "composition": {
+            "proteins": ["1 Sunny-side-up Fried Egg (~60g)", "3 Crispy Bacon Strips (~45g)"],
+            "carbs": ["2 Slices Golden Toasted Bread (~70g)"],
+            "produce": ["1/2 Ripe Avocado, sliced (~75g)"],
+            "dairy_and_fats": ["~10g Butter / Pan-frying Oil"]
+        },
         "detected_items": [
             {"name": "Farm Eggs", "qty": 1, "unit": "egg", "category": "egg"},
             {"name": "Toast Bread", "qty": 2, "unit": "slice", "category": "bread"},
             {"name": "Fresh Avocado", "qty": 0.5, "unit": "avocado", "category": "avocado"},
             {"name": "Crispy Bacon", "qty": 3, "unit": "strips", "category": "bacon"}
         ],
-        "estimated_macros": {"protein_g": 24, "calories": 480},
+        "estimated_macros": {
+            "calories": 480,
+            "protein_g": 24,
+            "carbs_g": 32,
+            "fat_g": 28
+        },
+        "confidence": "high",
         "chef_notes": "Detected 1 fried egg on toast, 1 extra toast slice, sliced avocado (~1/2 avocado), and crispy bacon."
     }
 
