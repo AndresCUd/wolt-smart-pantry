@@ -51,6 +51,7 @@ from wolt_manager import (
     log_meal_consumption,
     analyze_photo_with_vision,
     deduct_custom_ingredients,
+    generate_ai_recipe,
     generate_weekly_meal_plan,
     generate_default_weekly_plan,
     get_candidate_grocery_list,
@@ -181,6 +182,66 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_safe(update, context, help_text)
 
 @auth_guard
+async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generates a gourmet step-by-step AI chef recipe using in-stock ingredients: /recipe [dish or ingredients]"""
+    args = context.args if context.args else []
+    plan = load_meal_plan()
+    days = plan.get("days", [])
+    now = datetime.now()
+    day_idx = min(6, max(0, now.weekday()))
+    day_data = days[day_idx] if days and day_idx < len(days) else {}
+    
+    dish_name = "Today's Dish"
+    ingredients = []
+    
+    if args:
+        arg_str = " ".join(args).strip().lower()
+        if arg_str in ["breakfast", "brekkie", "desayuno"]:
+            meal = day_data.get("breakfast", {})
+            dish_name = meal.get("title", "Breakfast")
+            ingredients = meal.get("ingredients", ["Eggs", "Toast", "Avocado", "Butter"])
+        elif arg_str in ["lunch", "almuerzo"]:
+            meal = day_data.get("lunch", {})
+            dish_name = meal.get("title", "Lunch")
+            ingredients = meal.get("ingredients", ["Chicken fillet", "Rice", "Bell peppers", "Soy sauce"])
+        elif arg_str in ["dinner", "cena"]:
+            meal = day_data.get("dinner", {})
+            dish_name = meal.get("title", "Dinner")
+            ingredients = meal.get("ingredients", ["Protein", "Vegetables", "Pasta", "Garlic"])
+        elif arg_str in ["snack"]:
+            meal = day_data.get("snack", {})
+            dish_name = meal.get("title", "Healthy Snack")
+            ingredients = meal.get("ingredients", ["Banana", "Dark chocolate"])
+        else:
+            dish_name = "Custom Chef Creation"
+            ingredients = [a.strip() for a in " ".join(args).split(",") if a.strip()]
+    else:
+        # Default to today's lunch or nearest meal
+        meal = day_data.get("lunch", {})
+        dish_name = meal.get("title", "Today's Lunch")
+        ingredients = meal.get("ingredients", ["Chicken", "Rice", "Peppers"])
+        
+    msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a step-by-step gourmet recipe for:* `{dish_name}`...")
+    
+    recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients)
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("🍳 Breakfast Recipe", callback_data="btn_recipe_breakfast"),
+            InlineKeyboardButton("🥗 Lunch Recipe", callback_data="btn_recipe_lunch"),
+            InlineKeyboardButton("🍲 Dinner Recipe", callback_data="btn_recipe_dinner")
+        ],
+        [
+            InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu"),
+            InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
+        ]
+    ]
+    if msg:
+        await msg.edit_text(recipe_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await reply_safe(update, context, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's scheduled meal plan, chef tips, portions, and freshness status."""
     text, day_data = get_day_menu_formatted()
@@ -191,12 +252,15 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🍲 Dinner", callback_data="btn_view_dinner")
         ],
         [
+            InlineKeyboardButton("👨‍🍳 Step-by-Step AI Recipe", callback_data="btn_recipe_lunch"),
+            InlineKeyboardButton("🔄 Swap Meal", callback_data="btn_swap_meal")
+        ],
+        [
             InlineKeyboardButton("✅ Log Breakfast", callback_data="btn_eat_breakfast"),
             InlineKeyboardButton("✅ Log Lunch", callback_data="btn_eat_lunch"),
             InlineKeyboardButton("✅ Log Dinner", callback_data="btn_eat_dinner")
         ],
         [
-            InlineKeyboardButton("🔄 Swap Meal", callback_data="btn_swap_meal"),
             InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan"),
             InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
         ]
@@ -209,7 +273,10 @@ async def breakfast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's breakfast with exact food quantities, weights, and chef tips."""
     text, meal = get_single_meal_formatted("breakfast")
     keyboard = [
-        [InlineKeyboardButton("✅ Log Breakfast Eaten (Deduct Stock)", callback_data="btn_eat_breakfast")],
+        [
+            InlineKeyboardButton("👨‍🍳 Full AI Cooking Recipe", callback_data="btn_recipe_breakfast"),
+            InlineKeyboardButton("✅ Log Eaten (Deduct)", callback_data="btn_eat_breakfast")
+        ],
         [InlineKeyboardButton("🥗 View Lunch", callback_data="btn_view_lunch"), InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
     ]
     await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -219,7 +286,10 @@ async def lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's lunch with raw-to-cooked shrinkage math, exact ingredients & tips."""
     text, meal = get_single_meal_formatted("lunch")
     keyboard = [
-        [InlineKeyboardButton("✅ Log Lunch Eaten (Deduct Stock)", callback_data="btn_eat_lunch")],
+        [
+            InlineKeyboardButton("👨‍🍳 Full AI Cooking Recipe", callback_data="btn_recipe_lunch"),
+            InlineKeyboardButton("✅ Log Eaten (Deduct)", callback_data="btn_eat_lunch")
+        ],
         [InlineKeyboardButton("🍲 View Dinner", callback_data="btn_view_dinner"), InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
     ]
     await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -229,7 +299,10 @@ async def dinner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's dinner with exact ingredients & chef tips."""
     text, meal = get_single_meal_formatted("dinner")
     keyboard = [
-        [InlineKeyboardButton("✅ Log Dinner Eaten (Deduct Stock)", callback_data="btn_eat_dinner")],
+        [
+            InlineKeyboardButton("👨‍🍳 Full AI Cooking Recipe", callback_data="btn_recipe_dinner"),
+            InlineKeyboardButton("✅ Log Eaten (Deduct)", callback_data="btn_eat_dinner")
+        ],
         [InlineKeyboardButton("🍎 View Snack", callback_data="btn_view_snack"), InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
     ]
     await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -927,6 +1000,23 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         else:
             text, _ = log_meal_consumption(meal_type)
             await query.message.reply_text(text, parse_mode="Markdown")
+    elif data in ["btn_recipe_breakfast", "btn_recipe_lunch", "btn_recipe_dinner"]:
+        meal_type = "breakfast" if data == "btn_recipe_breakfast" else ("lunch" if data == "btn_recipe_lunch" else "dinner")
+        plan = load_meal_plan()
+        days = plan.get("days", [])
+        now = datetime.now()
+        day_idx = min(6, max(0, now.weekday()))
+        day_data = days[day_idx] if days and day_idx < len(days) else {}
+        meal = day_data.get(meal_type, {})
+        dish_name = meal.get("title", f"{meal_type.capitalize()}")
+        ingredients = meal.get("ingredients", [])
+        msg = await query.message.reply_text(f"👨‍🍳 *Chef AI is preparing a step-by-step recipe for:* `{dish_name}`...")
+        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients)
+        keyboard = [
+            [InlineKeyboardButton(f"✅ Log {meal_type.capitalize()} Eaten", callback_data=f"btn_eat_{meal_type}")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await msg.edit_text(recipe_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_cancel_photo":
         await query.edit_message_text("❌ Meal photo discarded.")
     elif data == "btn_cancel_plan":
@@ -949,6 +1039,7 @@ async def post_init(application):
     commands = [
         BotCommand("today", "🌅 Today's scheduled meals, portions & tips"),
         BotCommand("menu", "🌅 View today's full menu"),
+        BotCommand("recipe", "👨‍🍳 Get AI step-by-step recipe (/recipe lunch)"),
         BotCommand("breakfast", "🍳 View breakfast food quantities & tips"),
         BotCommand("lunch", "🥗 View lunch ingredients & portions"),
         BotCommand("dinner", "🍲 View dinner ingredients & portions"),
@@ -993,6 +1084,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("today", menu_command))
     app.add_handler(CommandHandler("menu", menu_command))
+    app.add_handler(CommandHandler("recipe", recipe_command))
     app.add_handler(CommandHandler("week", week_command))
     app.add_handler(CommandHandler("breakfast", breakfast_command))
     app.add_handler(CommandHandler("lunch", lunch_command))
