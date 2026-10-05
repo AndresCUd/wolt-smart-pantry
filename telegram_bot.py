@@ -107,19 +107,74 @@ def auth_guard(func):
             if update.effective_message:
                 await update.effective_message.reply_text("⛔ Unauthorized. Your Telegram User ID is not allowed to control this bot.")
             elif update.callback_query:
-                await update.callback_query.answer("⛔ Unauthorized.", show_alert=True)
+                try:
+                    await update.callback_query.answer("⛔ Unauthorized.", show_alert=True)
+                except Exception:
+                    pass
             return
         return await func(update, context, *args, **kwargs)
     return wrapper
 
 async def reply_safe(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None, parse_mode="Markdown"):
-    """Safely replies whether the trigger was a direct text command or an inline button callback."""
+    """Safely replies whether the trigger was a direct text command or an inline button callback, with Markdown parsing fallback."""
+    target = None
     if update.callback_query and update.callback_query.message:
-        return await update.callback_query.message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        target = update.callback_query.message
     elif update.effective_message:
-        return await update.effective_message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        target = update.effective_message
+
+    if target:
+        try:
+            return await target.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except Exception as e:
+            logger.debug(f"reply_safe failed with parse_mode={parse_mode}: {e}. Retrying without formatting.")
+            try:
+                return await target.reply_text(text, parse_mode=None, reply_markup=reply_markup)
+            except Exception as e2:
+                logger.error(f"reply_safe unformatted fallback failed: {e2}")
+                return None
     elif update.effective_chat:
-        return await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        try:
+            return await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode=parse_mode, reply_markup=reply_markup)
+        except Exception:
+            try:
+                return await context.bot.send_message(chat_id=update.effective_chat.id, text=text, parse_mode=None, reply_markup=reply_markup)
+            except Exception as e2:
+                logger.error(f"context.bot.send_message failed: {e2}")
+                return None
+    return None
+
+async def edit_safe(msg, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Safely edits an existing message with Markdown parsing fallback."""
+    if not msg:
+        return None
+    try:
+        return await msg.edit_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception as e:
+        logger.debug(f"edit_safe failed with parse_mode={parse_mode}: {e}. Retrying without formatting.")
+        try:
+            return await msg.edit_text(text, parse_mode=None, reply_markup=reply_markup)
+        except Exception as e2:
+            logger.error(f"edit_safe unformatted fallback failed: {e2}")
+            return None
+
+async def query_edit_safe(query, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Safely edits a callback query's message with Markdown fallback."""
+    if not query:
+        return None
+    try:
+        return await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except Exception as e:
+        logger.debug(f"query_edit_safe failed with parse_mode={parse_mode}: {e}. Retrying plain text.")
+        try:
+            return await query.edit_message_text(text, parse_mode=None, reply_markup=reply_markup)
+        except Exception:
+            if query.message:
+                try:
+                    return await query.message.reply_text(text, parse_mode=None, reply_markup=reply_markup)
+                except Exception:
+                    pass
+            return None
 
 @auth_guard
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -791,13 +846,13 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🍲 Dinner", callback_data="btn_photo_type_dinner")
         ],
         [
-            InlineKeyboardButton("👨‍🍳 Generate AI Recipe For This", callback_data="btn_recipe_lunch"),
+            InlineKeyboardButton("👨‍🍳 Generate AI Recipe For This", callback_data="btn_recipe_photo"),
             InlineKeyboardButton("❌ Discard", callback_data="btn_cancel_photo")
         ]
     ]
     
     if msg:
-        await msg.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await edit_safe(msg, text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -807,7 +862,10 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if not query:
         return
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.debug(f"query.answer() ignored timeout/error: {e}")
     data = query.data
     user_id = update.effective_user.id if update.effective_user else 0
     wolt_url = f"https://wolt.com/en/{DEFAULT_COUNTRY}/{DEFAULT_CITY}/venue/{DEFAULT_STORE}"
@@ -829,14 +887,14 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             "household_size": 1,
             "notes": ""
         })
-        await query.edit_message_text("🔄 Dietary preferences reset to standard default.")
+        await query_edit_safe(query, "🔄 Dietary preferences reset to standard default.")
     elif data == "btn_clear_pantry":
         clear_pantry_memory()
-        await query.edit_message_text("🗑️ Virtual pantry memory has been reset.")
+        await query_edit_safe(query, "🗑️ Virtual pantry memory has been reset.")
     elif data == "btn_sample_cart":
         items = SAMPLE_WEEKLY_GROCERY_LIST
         user_pending_plans[user_id] = items
-        await query.edit_message_text("🛒 Building sample grocery cart on your PC...")
+        await query_edit_safe(query, "🛒 Building sample grocery cart on your PC...")
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
@@ -863,7 +921,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_cart":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        await query.edit_message_text(f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your PC browser or Wolt phone app.")
+        await query_edit_safe(query, f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your PC browser or Wolt phone app.")
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
@@ -891,7 +949,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_autopay":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        await query.edit_message_text(f"💳 *Executing Full Auto-Pay on Wolt ({len(items)} items)...*\nSubmitting payment...")
+        await query_edit_safe(query, f"💳 *Executing Full Auto-Pay on Wolt ({len(items)} items)...*\nSubmitting payment...")
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
@@ -964,15 +1022,15 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             days[day_idx]["lunch"]["title"] = alt["title"]
             days[day_idx]["lunch"]["tip"] = alt["tip"]
             save_meal_plan(plan)
-            await query.edit_message_text(f"🔄 *Meal Swapped for Today!*\n\n🥗 *New Lunch:* {alt['title']}\n💡 _{alt['tip']}_")
+            await query_edit_safe(query, f"🔄 *Meal Swapped for Today!*\n\n🥗 *New Lunch:* {alt['title']}\n💡 _{alt['tip']}_")
         else:
-            await query.edit_message_text("🔄 Generated fresh meal plan variation.")
+            await query_edit_safe(query, "🔄 Generated fresh meal plan variation.")
     elif data == "btn_record_last":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
         record_purchase_in_memory(items, store_slug=DEFAULT_STORE)
         new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences())
         save_meal_plan(new_plan)
-        await query.edit_message_text("💾 *Success!* Items have been recorded into your virtual pantry memory and your weekly meal plan is now 100% synchronized with your groceries!")
+        await query_edit_safe(query, "💾 *Success!* Items have been recorded into your virtual pantry memory and your weekly meal plan is now 100% synchronized with your groceries!")
     elif data == "btn_confirm_photo_deduct":
         pending = user_pending_photo_meal.get(user_id)
         if pending:
@@ -1010,6 +1068,20 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         else:
             text, _ = log_meal_consumption(meal_type)
             await query.message.reply_text(text, parse_mode="Markdown")
+    elif data == "btn_recipe_photo":
+        pending = user_pending_photo_meal.get(user_id, {})
+        d = pending.get("data", {})
+        dish_name = d.get("dish_title", "Custom Dish from Photo")
+        detected = d.get("detected_items", [])
+        ingredients = [f"{it.get('qty', 1)} {it.get('name', 'Ingredient')}" for it in detected] if detected else ["Plate ingredients"]
+        
+        msg = await query.message.reply_text(f"👨‍🍳 *Chef AI is preparing a step-by-step recipe for:* `{dish_name}`...")
+        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients)
+        keyboard = [
+            [InlineKeyboardButton("✅ Deduct Exact Food Used", callback_data="btn_confirm_photo_deduct")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
     elif data in ["btn_recipe_breakfast", "btn_recipe_lunch", "btn_recipe_dinner"]:
         meal_type = "breakfast" if data == "btn_recipe_breakfast" else ("lunch" if data == "btn_recipe_lunch" else "dinner")
         plan = load_meal_plan()
@@ -1026,14 +1098,20 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton(f"✅ Log {meal_type.capitalize()} Eaten", callback_data=f"btn_eat_{meal_type}")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
         ]
-        await msg.edit_text(recipe_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_cancel_photo":
-        await query.edit_message_text("❌ Meal photo discarded.")
+        await query_edit_safe(query, "❌ Meal photo discarded.")
     elif data == "btn_cancel_plan":
-        await query.edit_message_text("❌ Meal plan cancelled.")
+        await query_edit_safe(query, "❌ Meal plan cancelled.")
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Logs uncaught exceptions and sends a helpful message to the user."""
+    err_str = str(context.error) if context.error else ""
+    # Filter out harmless callback timeouts or unmodified messages
+    if "Query is too old" in err_str or "Message is not modified" in err_str:
+        logger.debug(f"Ignored minor Telegram update error: {err_str}")
+        return
+
     logger.error("Exception while handling Telegram update:", exc_info=context.error)
     if isinstance(update, Update) and update.effective_message:
         try:
@@ -1042,7 +1120,12 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
                 parse_mode="Markdown"
             )
         except Exception:
-            pass
+            try:
+                await update.effective_message.reply_text(
+                    f"⚠️ An error occurred during execution:\n{context.error}\n\nUse /logs to view detailed trace."
+                )
+            except Exception:
+                pass
 
 async def post_init(application):
     """Registers bot autocomplete command suggestions with Telegram API."""
