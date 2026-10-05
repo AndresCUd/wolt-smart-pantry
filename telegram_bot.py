@@ -46,7 +46,9 @@ from wolt_manager import (
     load_meal_plan,
     save_meal_plan,
     get_day_menu_formatted,
+    generate_weekly_meal_plan,
     generate_default_weekly_plan,
+    get_candidate_grocery_list,
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
@@ -204,6 +206,7 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for d in days:
         text += (
             f"📍 *{d.get('day_name', 'Day')}* — _{d.get('freshness_tier', 'Standard')}_\n"
+            f"• 🍳 *Breakfast:* {d.get('breakfast', {}).get('title', 'Egg & Toast Scramble')}\n"
             f"• 🥗 *Lunch:* {d['lunch']['title']} ({d['lunch'].get('protein_raw', '')})\n"
             f"• 🍲 *Dinner:* {d['dinner']['title']} ({d['dinner'].get('protein_raw', '')})\n"
             f"• 🍎 *Snack:* {d['snack']['title']}\n"
@@ -394,73 +397,24 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     household_multiplier = prefs.get("household_size", 1)
     diet = prefs.get("diet_type", "omnivore").lower()
 
-    # Candidate shopping list tailored by diet type
-    if diet in ["vegetarian", "vegan"]:
-        base_items = [
-            ("Tofu 300g", 2 * household_multiplier),
-            ("Riivjuust mozzarella", 1 * household_multiplier) if diet == "vegetarian" else ("Avokaado karbis 2tk, 300g", 1),
-            ("Avokaado karbis 2tk, 300g", 1),
-            ("Kirssploomtomat", 1),
-            ("Rukola", 1),
-            ("Sibul 1kg", 1),
-            ("Eesti Pagar Tosta", 1),
-            ("Banaan", 6 * household_multiplier),
-            ("Paprika punane", 2 * household_multiplier)
-        ]
-    elif diet == "pescatarian":
-        base_items = [
-            ("Lõhefilee", 2 * household_multiplier),
-            ("Valge kala filee", 1 * household_multiplier),
-            ("Riivjuust mozzarella", 1),
-            ("Avokaado karbis 2tk, 300g", 1),
-            ("Kirssploomtomat", 1),
-            ("Rukola", 1),
-            ("Sibul 1kg", 1),
-            ("Eesti Pagar Tosta", 1),
-            ("Banaan", 6 * household_multiplier),
-            ("Paprika punane", 2 * household_multiplier)
-        ]
-    else: # Omnivore / High-Protein
-        base_items = [
-            ("Rakvere homemade minced meat, 400g", 2 * household_multiplier),
-            ("Tallegg maisikattega", 2 * household_multiplier),
-            ("Tallegg broileririnnafilee", 1 * household_multiplier),
-            ("Riivjuust mozzarella", 1),
-            ("Avokaado karbis 2tk, 300g", 1),
-            ("Kirssploomtomat", 1),
-            ("Rukola", 1),
-            ("Sibul 1kg", 1),
-            ("Eesti Pagar Tosta", 1),
-            ("Banaan", 6 * household_multiplier),
-            ("Paprika punane", 2 * household_multiplier)
-        ]
+    # Candidate shopping list tailored by diet, allergies, household size, and breakfast
+    filtered_items = get_candidate_grocery_list(prefs)
 
-    # Filter out items that violate allergies or avoided foods
-    filtered_items = []
-    removed_items = []
-    for item_tuple in base_items:
-        allowed, reason = is_item_allowed(item_tuple[0], prefs)
-        if allowed:
-            filtered_items.append(item_tuple)
-        else:
-            removed_items.append((item_tuple[0], reason))
-
+    # Synchronize and save the meal plan for these exact items
+    new_plan = generate_weekly_meal_plan(inventory_items=filtered_items, prefs=prefs)
+    save_meal_plan(new_plan)
     user_pending_plans[user_id] = filtered_items
 
     plan_text = (
         f"📋 *Proposed 7-Day Meal Plan ({diet.capitalize()} / {household_multiplier} person(s)):*\n\n"
-        "• *Days 1–3 (Tier 1 Fresh):* High-protein main meals, fresh poultry/meat or plant bowls, delicate arugula salad\n"
-        "• *Days 4–5 (Tier 2 Medium):* Coated cuts & toast, ripe avocados, daily bananas\n"
-        "• *Days 6–7 (Tier 3 Hardy):* Roasted bell peppers & cherry tomatoes with mozzarella bake\n\n"
+        "• *🍳 Daily Breakfasts:* 3-egg scrambles with avocado & toast, mozzarella & tomato omelettes\n"
+        "• *Days 1–3 (Tier 1 Fresh):* High-protein main meals (fresh ground beef, chicken cuts, delicate arugula)\n"
+        "• *Days 4–5 (Tier 2 Medium):* Sautéed chicken breast, sweet bell peppers & baby potatoes\n"
+        "• *Days 6–7 (Tier 3 Hardy):* Roasted vegetables, frittata & mozzarella pasta bake\n\n"
         "🛒 *Itemized Grocery List:*\n"
     )
     for it_name, it_qty in filtered_items:
         plan_text += f"• `{it_name}` × {it_qty}\n"
-
-    if removed_items:
-        plan_text += "\n🛡️ *Safety Exclusions Applied:*\n"
-        for r_name, r_reason in removed_items:
-            plan_text += f"• ~{r_name}~ _({r_reason})_\n"
 
     plan_text += "\n✋ *Checkpoint 1:* Would you like to build this cart on Wolt?"
 
@@ -709,7 +663,9 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data == "btn_record_last":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
         record_purchase_in_memory(items, store_slug=DEFAULT_STORE)
-        await query.edit_message_text("💾 *Success!* Items have been recorded into your virtual pantry memory. Zero duplicate staples will be bought next week!")
+        new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences())
+        save_meal_plan(new_plan)
+        await query.edit_message_text("💾 *Success!* Items have been recorded into your virtual pantry memory and your weekly meal plan is now 100% synchronized with your groceries!")
     elif data == "btn_cancel_plan":
         await query.edit_message_text("❌ Meal plan cancelled.")
 

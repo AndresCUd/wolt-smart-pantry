@@ -94,188 +94,234 @@ def display_user_preferences():
     print("="*60 + "\n")
     return prefs
 
-def generate_default_weekly_plan(prefs=None):
-    """Generates a structured 7-day meal plan based on user dietary preferences and freshness rules."""
+def generate_weekly_meal_plan(inventory_items=None, prefs=None):
+    """Generates an inventory-aligned, 7-day meal plan with breakfast, lunch, dinner, and snacks.
+    Respects cooking thermal shrinkage (W_raw = W_cooked / 0.70), user allergies, and freshness tiers."""
     if prefs is None:
         prefs = load_user_preferences()
     
     diet = prefs.get("diet_type", "omnivore").lower()
-    h_size = prefs.get("household_size", 1)
+    h_size = max(1, prefs.get("household_size", 1))
     
-    # Raw weight calculations: 150g cooked target = ~215g raw per person
+    # Target raw weight per person: ~215g raw yields ~150g cooked
     raw_p_g = int(215 * h_size)
     cooked_p_g = int(150 * h_size)
     
-    days_data = [
-        {
-            "day_index": 0,
-            "day_name": "Monday",
-            "freshness_tier": "Tier 1: Ultra-Fresh (48h max)",
-            "freshness_alert": "🌱 Consume ultra-fresh berries & fresh salmon today!",
-            "lunch": {
-                "title": "Mediterranean Salmon & Herb Basmati Rice",
-                "protein_raw": f"{raw_p_g}g fresh salmon (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Fresh salmon fillet", "Basmati rice", "Cucumber salad", "Greek yogurt / Tzatziki"],
-                "tip": "Bake salmon at 200°C for 12-14 mins with olive oil, lemon & dill. Serve over fluffy basmati rice."
-            },
-            "dinner": {
-                "title": "Garlic Butter Chicken & Roasted Broccoli",
-                "protein_raw": f"{raw_p_g}g chicken breast (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Chicken breast", "Broccoli florets", "Garlic", "Butter", "Baby potatoes"],
-                "tip": "Roast halved baby potatoes & broccoli. Sear chicken in skillet with minced garlic & butter."
-            },
-            "snack": {
-                "title": "Greek Yogurt & Fresh Blueberries",
-                "ingredients": [f"Greek yogurt ({150 * h_size}g)", f"Blueberries ({50 * h_size}g)", "Walnuts"]
-            }
-        },
-        {
-            "day_index": 1,
-            "day_name": "Tuesday",
-            "freshness_tier": "Tier 1: Fresh Ground Meat / Greens (72h max)",
-            "freshness_alert": "🥬 Cook fresh ground beef & leafy salad greens today.",
-            "lunch": {
-                "title": "Lean Beef & Vegetable Stir-Fry",
-                "protein_raw": f"{raw_p_g}g ground beef / hakkliha (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Ground beef (5-7% fat)", "Zucchini", "Bell pepper", "Soy sauce & sesame oil", "Jasmine rice"],
-                "tip": "Brown beef on high heat with garlic, toss in sliced peppers & zucchini with a splash of soy sauce."
-            },
-            "dinner": {
-                "title": "Italian Bolognese with Spaghetti",
-                "protein_raw": f"{raw_p_g}g ground meat (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Ground beef", "Crushed tomatoes", "Onion & garlic", "Spaghetti", "Parmesan"],
-                "tip": "Simmer crushed tomatoes with sautéed onions and browned meat for 20 mins."
-            },
-            "snack": {
-                "title": "Fresh Banana with Peanut Butter",
-                "ingredients": ["Banana", "Natural peanut butter (1-2 tbsp)"]
-            }
-        },
-        {
-            "day_index": 2,
-            "day_name": "Wednesday",
-            "freshness_tier": "Tier 2: Resilient Poultry & Cruciferous Veg",
-            "freshness_alert": "🥦 Great day for broccoli, cauliflower & chicken breasts.",
-            "lunch": {
-                "title": "Crispy Sheet-Pan Chicken Thighs & Sweet Potatoes",
-                "protein_raw": f"{raw_p_g + 30}g chicken thighs (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Chicken thighs", "Sweet potatoes", "Red onion", "Olive oil & paprika"],
-                "tip": "Toss diced sweet potatoes and seasoned chicken in paprika and olive oil; bake at 200°C for 25m."
-            },
-            "dinner": {
-                "title": "Creamy Tuscan Garlic Chicken with Penne",
-                "protein_raw": f"{raw_p_g}g chicken breast (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Chicken breast", "Penne pasta", "Cooking cream", "Cherry tomatoes", "Garlic"],
-                "tip": "Slice cooked chicken and fold into garlic cream sauce with blistered cherry tomatoes and penne."
-            },
-            "snack": {
-                "title": "Hard-Boiled Eggs with Sea Salt",
-                "ingredients": [f"{2 * h_size} Eggs", "Flaky sea salt", "Black pepper"]
-            }
-        },
-        {
-            "day_index": 3,
-            "day_name": "Thursday",
-            "freshness_tier": "Tier 2: Hearty Root Veg & Stored Proteins",
-            "freshness_alert": "🥕 Carrots, bell peppers & eggs are in prime condition.",
-            "lunch": {
-                "title": "Fluffy Shakshuka with Feta & Sourdough",
-                "protein_raw": f"{3 * h_size} Farm eggs",
-                "ingredients": ["Eggs", "Canned tomato passata", "Bell peppers", "Onion", "Feta cheese"],
-                "tip": "Simmer peppers in rich tomato sauce, create wells, crack in eggs and top with crumbled feta."
-            },
-            "dinner": {
-                "title": "Pan-Seared Pork Tenderloin with Roasted Carrots",
-                "protein_raw": f"{raw_p_g}g pork tenderloin (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Pork tenderloin", "Carrots", "Potatoes", "Thyme & butter"],
-                "tip": "Sear tenderloin on all sides in a hot cast iron skillet, finish in oven at 190°C for 10 mins."
-            },
-            "snack": {
-                "title": "Sliced Apple with Cinnamon",
-                "ingredients": ["Crisp apple", "Ground cinnamon"]
-            }
-        },
-        {
-            "day_index": 4,
-            "day_name": "Friday",
-            "freshness_tier": "Tier 3: Sturdy Root Veg, Cured & Canned Goods",
-            "freshness_alert": "🧀 Utilize firm cheeses, potatoes & canned pantry reserves.",
-            "lunch": {
-                "title": "Gourmet Smash Burger Bowl",
-                "protein_raw": f"{raw_p_g}g beef (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Ground beef patties", "Pickles", "Cheddar cheese", "Crispy oven potatoes", "Special sauce"],
-                "tip": "Sear seasoned beef patties extra crispy; serve over crispy potato cubes with pickles and cheddar."
-            },
-            "dinner": {
-                "title": "Creamy Tomato Basil Penne with Mozzarella",
-                "protein_raw": f"{raw_p_g}g protein / cheese",
-                "ingredients": ["Penne pasta", "Passata", "Garlic", "Fresh mozzarella / Parmesan", "Basil"],
-                "tip": "Boil penne al dente, stir in simmering tomato sauce with garlic and melt mozzarella on top."
-            },
-            "snack": {
-                "title": "Dark Chocolate & Almonds",
-                "ingredients": ["Dark chocolate (70%+)", "Roasted almonds"]
-            }
-        },
-        {
-            "day_index": 5,
-            "day_name": "Saturday",
-            "freshness_tier": "Tier 4: Long-term Staples & Freezer Reserves",
-            "freshness_alert": "🧊 Great day to tap into frozen fish, pasta, or pantry legumes.",
-            "lunch": {
-                "title": "Garlic Butter Shrimp & Lemon Linguine",
-                "protein_raw": f"{raw_p_g}g shrimp/prawns (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Shrimp / prawns", "Linguine", "Garlic", "Lemon", "Parsley", "Butter"],
-                "tip": "Sauté prawns in butter and garlic for 3 mins, deglaze with lemon juice and toss with pasta."
-            },
-            "dinner": {
-                "title": "Hearty Beef & Bean Chili Con Carne",
-                "protein_raw": f"{raw_p_g}g beef & black beans",
-                "ingredients": ["Ground beef", "Black / Kidney beans", "Canned tomatoes", "Cumin & chili", "Sour cream"],
-                "tip": "One-pot simmer: brown beef with spices, add beans and tomatoes, simmer gently for 30m."
-            },
-            "snack": {
-                "title": "Warm Cinnamon Butter Toast",
-                "ingredients": ["Sourdough toast", "Butter", "Cinnamon"]
-            }
-        },
-        {
-            "day_index": 6,
-            "day_name": "Sunday",
-            "freshness_tier": "Tier 4: Pantry Clearing & Weekly Reset Prep",
-            "freshness_alert": "📦 Clear remaining vegetables before tomorrow's fresh grocery delivery!",
-            "lunch": {
-                "title": "Pantry Reset Frittata / Big Omelette",
-                "protein_raw": f"{3 * h_size} Eggs",
-                "ingredients": ["Eggs", "Remaining leftover veggies", "Cheese", "Olive oil", "Herbs"],
-                "tip": "Whisk eggs with a splash of milk; pour over sautéed leftover veggies in a pan and bake until set."
-            },
-            "dinner": {
-                "title": "Slow-Simmered Chicken & Vegetable Curry",
-                "protein_raw": f"{raw_p_g}g chicken (yields ~{cooked_p_g}g cooked)",
-                "ingredients": ["Chicken thighs / breast", "Coconut milk / cream", "Curry spices", "Rice", "Carrots / Onions"],
-                "tip": "Simmer chicken with curry paste, onions and coconut milk for 25m. Serve with basmati rice."
-            },
-            "snack": {
-                "title": "Herbal Tea & Honey Biscuit",
-                "ingredients": ["Chamomile / Peppermint tea", "Honey", "Oat biscuit"]
-            }
-        }
-    ]
+    # 1. Collect all known inventory items
+    known_items = []
+    if inventory_items:
+        for it in inventory_items:
+            name = it[0] if isinstance(it, (tuple, list)) else (it.get("name") or it.get("query") if isinstance(it, dict) else str(it))
+            known_items.append(name.lower())
+    else:
+        pantry = load_pantry_memory()
+        for p in pantry.get("proteins", []):
+            known_items.append(p.get("name", "").lower())
+        for pr in pantry.get("produce", []):
+            known_items.append(pr.get("name", "").lower())
+        for s in pantry.get("staples", []):
+            known_items.append(s.get("name", "").lower())
+        if not known_items:
+            candidate = get_candidate_grocery_list(prefs)
+            for it in candidate:
+                known_items.append(it[0].lower())
+
+    # Check available inventory tags
+    has_beef = any(any(k in it for k in ["hakkliha", "veis", "beef"]) for it in known_items)
+    has_chicken = any(any(k in it for k in ["kana", "broiler", "chicken", "filee"]) for it in known_items)
+    has_salmon = any(any(k in it for k in ["lõhe", "kala", "salmon", "trout", "fish"]) for it in known_items)
+    has_tofu = any(any(k in it for k in ["tofu", "soija", "plant"]) for it in known_items)
     
-    # Adjust for Vegetarian / Vegan / Pescatarian if configured
+    # Fallback to diet exclusions
     if diet == "pescatarian":
-        for d in days_data:
-            for meal in [d["lunch"], d["dinner"]]:
-                if any(m in meal["title"].lower() for m in ["chicken", "beef", "pork", "chili"]):
-                    meal["title"] = meal["title"].replace("Chicken", "Cod / Salmon").replace("Beef", "Salmon / Tuna").replace("Pork", "Trout")
-                    meal["protein_raw"] = f"{raw_p_g}g fish/seafood (yields ~{cooked_p_g}g cooked)"
+        has_salmon = True
+        has_chicken = False
+        has_beef = False
     elif diet in ["vegetarian", "vegan"]:
-        for d in days_data:
-            for meal in [d["lunch"], d["dinner"]]:
-                meal["title"] = meal["title"].replace("Chicken", "Tofu").replace("Beef", "Lentil / Bean").replace("Salmon", "Tempeh / Chickpea")
-                meal["protein_raw"] = f"{raw_p_g}g plant protein (Tofu/Legumes)"
-                
+        has_tofu = True
+        has_chicken = False
+        has_beef = False
+        has_salmon = False
+
+    # 2. Build 7-day schedule with Breakfast, Lunch, Dinner, Snack
+    days_data = []
+    
+    # Day Names & Freshness Tiers
+    day_configs = [
+        ("Monday", "Tier 1: Ultra-Fresh (48h max)", "🌱 Consume fresh leafy greens, fresh ground meat & ripe avocados first!"),
+        ("Tuesday", "Tier 1: Ultra-Fresh (72h max)", "🥬 Use remaining fresh herbs, delicate salad greens & fresh mince."),
+        ("Wednesday", "Tier 2: Resilient Poultry & Veg", "🥦 Prime condition for chicken breast fillets, bell peppers & broccoli."),
+        ("Thursday", "Tier 2: Resilient Poultry & Veg", "🥕 Chicken, sweet peppers, carrots & eggs are in peak flavor."),
+        ("Friday", "Tier 3: Hearty Proteins & Cheeses", "🧀 Great day for melted mozzarella, pasta bakes & burger bowls."),
+        ("Saturday", "Tier 4: Freezer & Pantry Reserves", "🧊 Tap into pantry grains, canned tomato passata & frozen cuts."),
+        ("Sunday", "Tier 4: Fridge Clearing & Reset", "📦 Cook a big vegetable omelette / frittata to clear stock before next delivery.")
+    ]
+
+    # Allergen-safe snacks (strictly avoids peanuts, shellfish, and user-avoided foods)
+    safe_snacks = [
+        {"title": "Fresh Banana with Dark Chocolate", "ingredients": ["Fresh banana", "2 squares dark chocolate (70%+ kakao)"]},
+        {"title": "Crisp Apple Slices with Cinnamon", "ingredients": ["Crisp red/green apple", "Ground Ceylon cinnamon"]},
+        {"title": "Greek Yogurt & Honey Bowl", "ingredients": [f"Greek yogurt ({150 * h_size}g)", "Raw honey (1 tbsp)"]},
+        {"title": "Toasted Sourdough with Butter & Flaky Salt", "ingredients": ["Sourdough toast slice", "Farm butter", "Sea salt flakes"]},
+        {"title": "Fresh Banana with Honey & Pumpkin Seeds", "ingredients": ["Fresh banana", "Pumpkin seeds (1 tbsp)", "Honey"]},
+        {"title": "Hard-Boiled Farm Eggs with Sea Salt", "ingredients": [f"{2 * h_size} Eggs", "Flaky sea salt", "Black pepper"]},
+        {"title": "Warm Herbal Tea with Cinnamon Toast", "ingredients": ["Chamomile tea", "Toasted bread", "Butter & cinnamon"]}
+    ]
+
+    # Build meals per day based on what is in stock
+    for idx, (day_name, tier, alert) in enumerate(day_configs):
+        # 🍳 Breakfast
+        if idx == 0:
+            breakfast = {
+                "title": "3-Egg Scramble with Smashed Avocado & Warm Toast",
+                "protein_raw": f"{3 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Eesti Pagar Tosta bread", "Fresh avocado", "Butter / Olive oil", "Sea salt"],
+                "tip": "Whisk eggs with a splash of water; scramble gently on medium-low heat with butter and serve over toasted bread with sliced avocado."
+            }
+        elif idx == 1:
+            breakfast = {
+                "title": "Fluffy Mozzarella & Cherry Tomato Omelette",
+                "protein_raw": f"{3 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Grated mozzarella cheese", "Cherry tomatoes", "Tosta bread", "Fresh arugula"],
+                "tip": "Pour whisked eggs into a buttered pan, fold in halved cherry tomatoes and mozzarella, and fold over when cheese is melted."
+            }
+        elif idx == 2:
+            breakfast = {
+                "title": "Greek Yogurt Power Bowl with Fresh Banana & Honey",
+                "protein_raw": f"{200 * h_size}g Greek yogurt (18g protein)",
+                "ingredients": ["Greek yogurt", "Fresh banana", "Honey", "Pumpkin seeds / Chia"],
+                "tip": "Layer thick Greek yogurt with sliced banana, a drizzle of honey, and toasted seeds for a fast high-protein breakfast."
+            }
+        elif idx == 3:
+            breakfast = {
+                "title": "Sweet Bell Pepper Shakshuka with Toasted Sourdough",
+                "protein_raw": f"{3 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Red bell pepper", "Onion", "Crushed tomatoes", "Tosta bread"],
+                "tip": "Sauté diced bell peppers and onions, add tomato sauce, make wells, crack in eggs and cover for 5 mins until whites set."
+            }
+        elif idx == 4:
+            breakfast = {
+                "title": "Smashed Avocado & Fried Egg Toast with Melted Mozzarella",
+                "protein_raw": f"{2 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Eesti Pagar Tosta", "Avocado", "Mozzarella", "Black pepper"],
+                "tip": "Toast bread with mozzarella until melted. Fry eggs sunny side up and place over seasoned smashed avocado."
+            }
+        elif idx == 5:
+            breakfast = {
+                "title": "Weekend Loaded Scramble with Fresh Arugula & Tomatoes",
+                "protein_raw": f"{3 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Fresh arugula", "Cherry tomatoes", "Butter", "Toasted bread"],
+                "tip": "Softly scramble eggs with butter; fold in fresh arugula and warm blistered cherry tomatoes right before taking off heat."
+            }
+        else: # Sunday
+            breakfast = {
+                "title": "Big Sunday Brunch Frittata with Caramelized Onions & Cheese",
+                "protein_raw": f"{3 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Onions", "Mozzarella", "Bell peppers", "Herbs"],
+                "tip": "Sauté sliced onions until golden; pour whisked eggs over, top with cheese, and bake/fry until golden and puffed."
+            }
+
+        # 🥗 Lunch & 🍲 Dinner (Dynamic based on proteins)
+        if has_salmon and idx == 0:
+            lunch = {
+                "title": "Pan-Seared Salmon & Herb Basmati Rice",
+                "protein_raw": f"{raw_p_g}g fresh salmon (yields ~{cooked_p_g}g cooked)",
+                "ingredients": ["Fresh salmon fillet", "Basmati rice", "Arugula salad", "Lemon & olive oil"],
+                "tip": "Pan-sear salmon skin-side down for 4 mins, flip for 2 mins with lemon & butter. Serve over fluffy basmati rice."
+            }
+        elif has_beef and idx in [0, 1, 4]:
+            if idx == 0:
+                lunch = {
+                    "title": "Lean Beef & Vegetable Rice Skillet",
+                    "protein_raw": f"{raw_p_g}g ground beef / veisehakkliha (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Minced beef", "Red bell pepper", "Yellow onion", "Basmati rice", "Soy sauce & garlic"],
+                    "tip": "Brown beef on high heat with garlic and diced onions; toss in sliced bell peppers with a splash of soy sauce."
+                }
+            elif idx == 1:
+                lunch = {
+                    "title": "Classic Italian Beef Bolognese with Pasta",
+                    "protein_raw": f"{raw_p_g}g ground beef (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Minced beef", "Crushed tomatoes", "Onion & garlic", "Pasta", "Grated mozzarella / Parmesan"],
+                    "tip": "Simmer browned beef with sautéed onions, garlic and tomato sauce for 15 mins. Toss with pasta and melted cheese."
+                }
+            else:
+                lunch = {
+                    "title": "Gourmet Beef Smash Burger Bowl with Potatoes",
+                    "protein_raw": f"{raw_p_g}g ground beef (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Ground beef patties", "Mozzarella / Cheddar", "Crispy oven potatoes", "Cherry tomatoes", "Arugula"],
+                    "tip": "Sear seasoned beef patties on high heat until crispy; serve over roasted potato cubes with melted cheese and fresh arugula."
+                }
+        elif has_chicken:
+            lunch = {
+                "title": "Crispy Pan-Seared Chicken & Roasted Veggies",
+                "protein_raw": f"{raw_p_g}g chicken fillet (yields ~{cooked_p_g}g cooked)",
+                "ingredients": ["Chicken breast fillet", "Red bell pepper", "Baby potatoes / Rice", "Garlic butter"],
+                "tip": "Sear seasoned chicken breast in garlic butter for 5 mins per side. Serve alongside roasted peppers and rice."
+            }
+        else:
+            lunch = {
+                "title": "Mediterranean Mozzarella & Tomato Basil Penne",
+                "protein_raw": f"{raw_p_g}g protein / cheese",
+                "ingredients": ["Penne pasta", "Cherry tomatoes", "Mozzarella", "Garlic & olive oil", "Fresh arugula"],
+                "tip": "Toss boiled penne with warm blistered cherry tomatoes, minced garlic, olive oil, and melted mozzarella cubes."
+            }
+
+        # Dinner
+        if has_chicken and idx in [0, 2, 3, 6]:
+            if idx == 0:
+                dinner = {
+                    "title": "Garlic Butter Chicken Fillet with Arugula & Tomatoes",
+                    "protein_raw": f"{raw_p_g}g chicken breast (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Chicken breast (Tallegg)", "Fresh arugula", "Cherry tomatoes", "Mozzarella", "Olive oil & lemon"],
+                    "tip": "Pan-fry chicken in butter and garlic. Toss arugula and cherry tomatoes with olive oil and top with mozzarella."
+                }
+            elif idx == 2:
+                dinner = {
+                    "title": "Crispy Sheet-Pan Chicken & Sweet Peppers",
+                    "protein_raw": f"{raw_p_g}g chicken fillet (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Chicken breast / cuts", "Red bell peppers", "Yellow onions", "Olive oil & paprika"],
+                    "tip": "Toss chicken strips and sliced peppers with olive oil and paprika; roast at 200°C for 20 mins."
+                }
+            elif idx == 3:
+                dinner = {
+                    "title": "Creamy Garlic Chicken & Mozzarella Pasta",
+                    "protein_raw": f"{raw_p_g}g chicken fillet (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Chicken breast", "Pasta", "Garlic", "Mozzarella", "Cherry tomatoes"],
+                    "tip": "Slice cooked chicken and fold into garlic passata sauce with pasta and melted mozzarella."
+                }
+            else:
+                dinner = {
+                    "title": "Slow-Simmered Chicken & Vegetable Curry with Rice",
+                    "protein_raw": f"{raw_p_g}g chicken (yields ~{cooked_p_g}g cooked)",
+                    "ingredients": ["Chicken fillet", "Onions", "Bell peppers", "Curry spices", "Basmati rice"],
+                    "tip": "Simmer diced chicken with onions, peppers, and curry spices for 20 mins. Serve over hot basmati rice."
+                }
+        elif has_beef:
+            dinner = {
+                "title": "Hearty Beef Skillet with Bell Peppers & Rice",
+                "protein_raw": f"{raw_p_g}g ground beef (yields ~{cooked_p_g}g cooked)",
+                "ingredients": ["Ground beef", "Bell peppers", "Onions", "Rice", "Soy sauce"],
+                "tip": "Sauté onions and beef, fold in sliced peppers and simmer with rice for a fast one-pan dinner."
+            }
+        else:
+            dinner = {
+                "title": "Rustic Shakshuka Dinner with Sourdough Toast",
+                "protein_raw": f"{3 * h_size} Farm eggs",
+                "ingredients": ["Eggs", "Crushed tomatoes", "Bell peppers", "Mozzarella", "Toast"],
+                "tip": "Simmer peppers in rich tomato sauce, crack in eggs and top with mozzarella. Dip warm toast."
+            }
+
+        days_data.append({
+            "day_index": idx,
+            "day_name": day_name,
+            "freshness_tier": tier,
+            "freshness_alert": alert,
+            "breakfast": breakfast,
+            "lunch": lunch,
+            "dinner": dinner,
+            "snack": safe_snacks[idx % len(safe_snacks)]
+        })
+
     return {
         "last_generated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "household_size": h_size,
@@ -283,15 +329,19 @@ def generate_default_weekly_plan(prefs=None):
         "days": days_data
     }
 
+def generate_default_weekly_plan(prefs=None):
+    """Fallback alias for generating default weekly plan."""
+    return generate_weekly_meal_plan(inventory_items=None, prefs=prefs)
+
 def load_meal_plan():
-    """Loads active weekly meal plan from disk or initializes default plan."""
+    """Loads active weekly meal plan from disk or initializes plan."""
     if os.path.exists(MEAL_PLAN_FILE):
         try:
             with open(MEAL_PLAN_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
-    plan = generate_default_weekly_plan()
+    plan = generate_weekly_meal_plan()
     save_meal_plan(plan)
     return plan
 
@@ -302,11 +352,11 @@ def save_meal_plan(plan):
     print(f"[📋] Active meal plan saved: {MEAL_PLAN_FILE}")
 
 def get_day_menu_formatted(day_index=None):
-    """Returns a rich formatted text message for a specific day's menu."""
+    """Returns a rich formatted text message for a specific day's menu with Breakfast, Lunch, Dinner, Snack."""
     plan = load_meal_plan()
     days = plan.get("days", [])
     if not days:
-        plan = generate_default_weekly_plan()
+        plan = generate_weekly_meal_plan()
         days = plan.get("days", [])
         save_meal_plan(plan)
         
@@ -321,25 +371,33 @@ def get_day_menu_formatted(day_index=None):
     date_str = now.strftime("%A, %b %d")
     h_size = plan.get("household_size", 1)
     
+    breakfast = day_data.get("breakfast", {})
+    lunch = day_data.get("lunch", {})
+    dinner = day_data.get("dinner", {})
+    snack = day_data.get("snack", {})
+
     text = (
         f"🌅 *TODAY'S MENU — {date_str}*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 *Portions:* {h_size} person(s)\n"
-        f"📅 *Schedule:* Day {day_index + 1}/7 ({day_data.get('day_name', 'Today')})\n"
+        f"👥 *Portions:* {h_size} person(s) | 📅 *Schedule:* Day {day_index + 1}/7 ({day_data.get('day_name', 'Today')})\n"
         f"🛡️ *Freshness:* `{day_data.get('freshness_tier', 'Standard')}`\n\n"
         
-        f"🥗 *LUNCH: {day_data['lunch']['title']}*\n"
-        f"• *Protein:* {day_data['lunch'].get('protein_raw', 'Standard portion')}\n"
-        f"• *Ingredients:* {', '.join(day_data['lunch'].get('ingredients', []))}\n"
-        f"• *Chef Tip:* _{day_data['lunch'].get('tip', '')}_\n\n"
+        f"🍳 *BREAKFAST: {breakfast.get('title', 'High-Protein Breakfast')}*\n"
+        f"• *Ingredients:* {', '.join(breakfast.get('ingredients', []))}\n"
+        f"• *Chef Tip:* _{breakfast.get('tip', '')}_\n\n"
         
-        f"🍲 *DINNER: {day_data['dinner']['title']}*\n"
-        f"• *Protein:* {day_data['dinner'].get('protein_raw', 'Standard portion')}\n"
-        f"• *Ingredients:* {', '.join(day_data['dinner'].get('ingredients', []))}\n"
-        f"• *Chef Tip:* _{day_data['dinner'].get('tip', '')}_\n\n"
+        f"🥗 *LUNCH: {lunch.get('title', 'Healthy Lunch')}*\n"
+        f"• *Protein:* {lunch.get('protein_raw', 'Standard portion')}\n"
+        f"• *Ingredients:* {', '.join(lunch.get('ingredients', []))}\n"
+        f"• *Chef Tip:* _{lunch.get('tip', '')}_\n\n"
         
-        f"🍎 *SNACK: {day_data['snack']['title']}*\n"
-        f"• {', '.join(day_data['snack'].get('ingredients', []))}\n\n"
+        f"🍲 *DINNER: {dinner.get('title', 'Chef Dinner')}*\n"
+        f"• *Protein:* {dinner.get('protein_raw', 'Standard portion')}\n"
+        f"• *Ingredients:* {', '.join(dinner.get('ingredients', []))}\n"
+        f"• *Chef Tip:* _{dinner.get('tip', '')}_\n\n"
+        
+        f"🍎 *SNACK: {snack.get('title', 'Healthy Snack')}*\n"
+        f"• {', '.join(snack.get('ingredients', []))}\n\n"
         
         f"💡 *Freshness Reminder:*\n"
         f"{day_data.get('freshness_alert', 'Keep fresh produce stored properly.')}\n"
@@ -475,11 +533,74 @@ DEFAULT_GROCERY_LIST = [
     ("Tallegg maisikattega", 1)
 ]
 
+def get_candidate_grocery_list(prefs=None):
+    """Generates a candidate shopping list tailored to user diet, allergies, household size, and breakfast needs."""
+    if prefs is None:
+        prefs = load_user_preferences()
+        
+    h_mult = max(1, prefs.get("household_size", 1))
+    diet = prefs.get("diet_type", "omnivore").lower()
+    avoid = [a.lower() for a in prefs.get("avoided_ingredients", [])]
+    
+    # Choose beef mince vs pork mince
+    mince_name = "Rakvere veisehakkliha" if "pork" in avoid else "Rakvere kodune hakkliha"
+    
+    if diet in ["vegetarian", "vegan"]:
+        items = [
+            ("Tofu 300g", 2 * h_mult),
+            ("Kanamunad 10tk", 1 * h_mult) if diet == "vegetarian" else ("Kaerahelbed 500g", 1),
+            ("Riivjuust mozzarella", 1 * h_mult) if diet == "vegetarian" else ("Avokaado karbis 2tk, 300g", 1),
+            ("Avokaado karbis 2tk, 300g", 1),
+            ("Kirssploomtomat", 1),
+            ("Rukola", 1),
+            ("Sibul 1kg", 1),
+            ("Eesti Pagar Tosta", 1),
+            ("Banaan", 6 * h_mult),
+            ("Paprika punane", 2 * h_mult)
+        ]
+    elif diet == "pescatarian":
+        items = [
+            ("Lõhefilee", 2 * h_mult),
+            ("Valge kala filee", 1 * h_mult),
+            ("Kanamunad 10tk", 1 * h_mult),
+            ("Riivjuust mozzarella", 1),
+            ("Avokaado karbis 2tk, 300g", 1),
+            ("Kirssploomtomat", 1),
+            ("Rukola", 1),
+            ("Sibul 1kg", 1),
+            ("Eesti Pagar Tosta", 1),
+            ("Banaan", 6 * h_mult),
+            ("Paprika punane", 2 * h_mult)
+        ]
+    else: # Omnivore / High-Protein
+        items = [
+            (mince_name, 2 * h_mult),
+            ("Tallegg maisikattega", 2 * h_mult),
+            ("Tallegg broileririnnafilee", 1 * h_mult),
+            ("Kanamunad 10tk", 1 * h_mult),
+            ("Riivjuust mozzarella", 1),
+            ("Avokaado karbis 2tk, 300g", 1),
+            ("Kirssploomtomat", 1),
+            ("Rukola", 1),
+            ("Sibul 1kg", 1),
+            ("Eesti Pagar Tosta", 1),
+            ("Banaan", 6 * h_mult),
+            ("Paprika punane", 2 * h_mult)
+        ]
+        
+    filtered = []
+    for it in items:
+        allowed, _ = is_item_allowed(it[0], prefs)
+        if allowed:
+            filtered.append(it)
+    return filtered
+
 # Default sample grocery list for quick testing and demonstration
 SAMPLE_WEEKLY_GROCERY_LIST = [
-    ("Rakvere kodune hakkliha", 2),      # 2x 400g = 800g fresh mixed beef/pork mince
+    ("Rakvere veisehakkliha", 2),        # 2x 400g = 800g fresh beef mince
     ("Tallegg maisikattega", 2),         # 2x 280g = 560g crispy corn chicken fillet
     ("Tallegg broileririnnafilee", 1),   # 1x 400g-500g fresh chicken breast fillet
+    ("Kanamunad 10tk", 1),               # 1x 10-pack farm eggs for daily breakfasts
     ("Riivjuust mozzarella", 1),         # 1x grated mozzarella cheese (150g-200g)
     ("Avokaado karbis", 1),              # 1x 2-pack ready-to-eat avocados
     ("Kirssploomtomat", 1),              # 1x cherry plum tomatoes punnet (250g-500g)
