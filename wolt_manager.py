@@ -176,49 +176,49 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
                 "title": "3-Egg Scramble with Smashed Avocado & Warm Toast",
                 "protein_raw": f"{3 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Eesti Pagar Tosta bread", "Fresh avocado", "Butter / Olive oil", "Sea salt"],
-                "tip": "Whisk eggs with a splash of water; scramble gently on medium-low heat with butter and serve over toasted bread with sliced avocado."
+                "tip": "🔥 **Heat:** Medium-low with 10g cold butter.\n👨‍🍳 **Technique:** Whisk eggs with a pinch of salt. Pour into foaming butter and gently sweep with a silicone spatula from the edges to the center for 90 seconds. Remove from heat while still slightly glossy and creamy (residual pan heat finishes them). Spread mashed avocado seasoned with lemon & flaky sea salt over hot crisp toast."
             }
         elif idx == 1:
             breakfast = {
                 "title": "Fluffy Mozzarella & Cherry Tomato Omelette",
                 "protein_raw": f"{3 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Grated mozzarella cheese", "Cherry tomatoes", "Tosta bread", "Fresh arugula"],
-                "tip": "Pour whisked eggs into a buttered pan, fold in halved cherry tomatoes and mozzarella, and fold over when cheese is melted."
+                "tip": "🔥 **Heat:** Medium heat with a non-stick skillet.\n👨‍🍳 **Technique:** Halve cherry tomatoes and blister them in the dry pan for 60s first, then set aside. Pour whisked eggs in, gently swirling to coat. When the base sets (2 mins), scatter mozzarella and warm tomatoes over one half. Fold the omelette over, turn off heat, and let the cheese melt in the trapped steam for 1 minute."
             }
         elif idx == 2:
             breakfast = {
                 "title": "Greek Yogurt Power Bowl with Fresh Banana & Honey",
                 "protein_raw": f"{200 * h_size}g Greek yogurt (18g protein)",
                 "ingredients": ["Greek yogurt", "Fresh banana", "Honey", "Pumpkin seeds / Chia"],
-                "tip": "Layer thick Greek yogurt with sliced banana, a drizzle of honey, and toasted seeds for a fast high-protein breakfast."
+                "tip": "🍯 **Technique:** Spoon thick chilled Greek yogurt into a wide shallow bowl. Slice fresh bananas on a 45° angle. Lightly toast seeds in a dry pan for 2 minutes until fragrant and nutty, then scatter over the bowl. Finish with a warm swirl of raw honey and a pinch of cinnamon for maximum flavor contrast."
             }
         elif idx == 3:
             breakfast = {
                 "title": "Sweet Bell Pepper Shakshuka with Toasted Sourdough",
                 "protein_raw": f"{3 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Red bell pepper", "Onion", "Crushed tomatoes", "Tosta bread"],
-                "tip": "Sauté diced bell peppers and onions, add tomato sauce, make wells, crack in eggs and cover for 5 mins until whites set."
+                "tip": "🔥 **Heat:** Gentle medium simmer.\n👨‍🍳 **Technique:** Sauté diced bell peppers and onions in olive oil for 6 mins until soft and sweet. Stir in crushed tomatoes and minced garlic; simmer 5 mins until thick. Make small wells with a spoon, crack eggs directly into the sauce, cover with a tight lid for 4-5 mins until the whites are opaque but the yolks stay runny and jammy."
             }
         elif idx == 4:
             breakfast = {
                 "title": "Smashed Avocado & Fried Egg Toast with Melted Mozzarella",
                 "protein_raw": f"{2 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Eesti Pagar Tosta", "Avocado", "Mozzarella", "Black pepper"],
-                "tip": "Toast bread with mozzarella until melted. Fry eggs sunny side up and place over seasoned smashed avocado."
+                "tip": "🍳 **Lace-Edge Method:** Toast bread with a layer of grated mozzarella until bubbling. In a separate skillet, heat 1 tbsp olive oil or butter on medium-high until sizzling. Crack eggs in and baste hot fat over the whites with a spoon. You'll get crispy, caramelized lace edges while keeping the yolk rich and runny."
             }
         elif idx == 5:
             breakfast = {
-                "title": "Weekend Loaded Scramble with Fresh Arugula & Tomatoes",
+                "title": "Weekend Loaded Scramble with Fresh Arugula & Blistered Tomatoes",
                 "protein_raw": f"{3 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Fresh arugula", "Cherry tomatoes", "Butter", "Toasted bread"],
-                "tip": "Softly scramble eggs with butter; fold in fresh arugula and warm blistered cherry tomatoes right before taking off heat."
+                "tip": "🍅 **Technique:** Blister whole cherry tomatoes in a hot skillet until their skins burst and caramelize. Softly scramble eggs in cold butter on low heat. Fold in the fresh peppery arugula and warm cherry tomatoes during the final 10 seconds off-heat so the greens wilt delicately without releasing excess moisture."
             }
         else: # Sunday
             breakfast = {
                 "title": "Big Sunday Brunch Frittata with Caramelized Onions & Cheese",
                 "protein_raw": f"{3 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Onions", "Mozzarella", "Bell peppers", "Herbs"],
-                "tip": "Sauté sliced onions until golden; pour whisked eggs over, top with cheese, and bake/fry until golden and puffed."
+                "tip": "🍳 **Pan-to-Broiler Method:** Slowly sweat thinly sliced onions with a pinch of salt for 8 minutes until golden and sweet. Pour whisked eggs over, top generously with mozzarella. Cook on low heat until edges set (4 mins), then place the skillet under the oven broiler (220°C) for 3 minutes until puffed, golden, and bubbly."
             }
 
         # 🥗 Lunch & 🍲 Dinner (Dynamic based on proteins)
@@ -227,7 +227,7 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
                 "title": "Pan-Seared Salmon & Herb Basmati Rice",
                 "protein_raw": f"{raw_p_g}g fresh salmon (yields ~{cooked_p_g}g cooked)",
                 "ingredients": ["Fresh salmon fillet", "Basmati rice", "Arugula salad", "Lemon & olive oil"],
-                "tip": "Pan-sear salmon skin-side down for 4 mins, flip for 2 mins with lemon & butter. Serve over fluffy basmati rice."
+                "tip": "🐟 **Crispy Skin Method:** Pat salmon skin completely dry with paper towels and season with salt. Place skin-side down in a hot pan with 1 tbsp olive oil. Press gently for 30s with a spatula so skin stays flat. Cook 4 mins on skin until 80% opaque, flip for 1-2 mins with lemon juice & 10g butter. Rest 2 mins before serving."
             }
         elif has_beef and idx in [0, 1, 4]:
             if idx == 0:
@@ -235,35 +235,35 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
                     "title": "Lean Beef & Vegetable Rice Skillet",
                     "protein_raw": f"{raw_p_g}g ground beef / veisehakkliha (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Minced beef", "Red bell pepper", "Yellow onion", "Basmati rice", "Soy sauce & garlic"],
-                    "tip": "Brown beef on high heat with garlic and diced onions; toss in sliced bell peppers with a splash of soy sauce."
+                    "tip": "🥩 **High-Heat Sear:** Heat skillet until smoking hot with 1 tbsp oil. Add ground beef in chunks without stirring for 2 mins to build a deep savory crust (Maillard reaction). Break apart, toss in diced onions and bell peppers for 3 mins. Deglaze with 1 tbsp soy sauce and garlic right before serving over fluffy basmati rice."
                 }
             elif idx == 1:
                 lunch = {
                     "title": "Classic Italian Beef Bolognese with Pasta",
                     "protein_raw": f"{raw_p_g}g ground beef (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Minced beef", "Crushed tomatoes", "Onion & garlic", "Pasta", "Grated mozzarella / Parmesan"],
-                    "tip": "Simmer browned beef with sautéed onions, garlic and tomato sauce for 15 mins. Toss with pasta and melted cheese."
+                    "tip": "🍝 **Sauce Emulsification:** Brown beef with finely chopped onions and garlic until caramelized. Pour in tomato passata, season with oregano and black pepper, and simmer gently for 15 mins. Cook pasta al dente (1 min less than box instructions) and toss directly in the sauce with 2 tbsp pasta water so sauce clings silky to every bite."
                 }
             else:
                 lunch = {
                     "title": "Gourmet Beef Smash Burger Bowl with Potatoes",
                     "protein_raw": f"{raw_p_g}g ground beef (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Ground beef patties", "Mozzarella / Cheddar", "Crispy oven potatoes", "Cherry tomatoes", "Arugula"],
-                    "tip": "Sear seasoned beef patties on high heat until crispy; serve over roasted potato cubes with melted cheese and fresh arugula."
+                    "tip": "🍔 **Smash Sear & Crispy Potatoes:** Cube potatoes and roast at 210°C with olive oil & paprika for 25 mins until crispy. Shape ground beef into balls, place in a smoking hot skillet, and press firmly flat with a spatula. Sear 2 mins until deeply browned, flip, top with mozzarella, cover 1 min to melt, and assemble over warm potatoes and arugula."
                 }
         elif has_chicken:
             lunch = {
                 "title": "Crispy Pan-Seared Chicken & Roasted Veggies",
                 "protein_raw": f"{raw_p_g}g chicken fillet (yields ~{cooked_p_g}g cooked)",
                 "ingredients": ["Chicken breast fillet", "Red bell pepper", "Baby potatoes / Rice", "Garlic butter"],
-                "tip": "Sear seasoned chicken breast in garlic butter for 5 mins per side. Serve alongside roasted peppers and rice."
+                "tip": "🍗 **Juicy Sear & Rest Rule:** Pat chicken fillet dry with paper towels and slice horizontally into even cutlets. Season with salt, black pepper, and garlic. Sear in foaming butter for 4 mins on medium-high heat without moving. Flip for 3 mins. Transfer to a cutting board and let rest for 3 full minutes before slicing to keep all juices inside."
             }
         else:
             lunch = {
                 "title": "Mediterranean Mozzarella & Tomato Basil Penne",
                 "protein_raw": f"{raw_p_g}g protein / cheese",
                 "ingredients": ["Penne pasta", "Cherry tomatoes", "Mozzarella", "Garlic & olive oil", "Fresh arugula"],
-                "tip": "Toss boiled penne with warm blistered cherry tomatoes, minced garlic, olive oil, and melted mozzarella cubes."
+                "tip": "🍅 **Warm Blister Sauce:** Cook penne in well-salted boiling water. In a pan, warm olive oil with minced garlic and halved cherry tomatoes over medium heat for 4 mins until tomatoes burst into a natural sauce. Toss drained hot pasta into the pan off-heat with mozzarella cubes so the cheese melts into creamy pockets."
             }
 
         # Dinner
@@ -273,42 +273,42 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
                     "title": "Garlic Butter Chicken Fillet with Arugula & Tomatoes",
                     "protein_raw": f"{raw_p_g}g chicken breast (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Chicken breast (Tallegg)", "Fresh arugula", "Cherry tomatoes", "Mozzarella", "Olive oil & lemon"],
-                    "tip": "Pan-fry chicken in butter and garlic. Toss arugula and cherry tomatoes with olive oil and top with mozzarella."
+                    "tip": "🧄 **Butter Basting Method:** Sear chicken fillets for 4 mins per side. In the last 2 minutes, toss in 2 crushed garlic cloves and 15g butter; tilt the pan and spoon the fragrant foaming butter continuously over the chicken breast. Serve alongside fresh arugula tossed with fresh lemon juice and extra virgin olive oil."
                 }
             elif idx == 2:
                 dinner = {
                     "title": "Crispy Sheet-Pan Chicken & Sweet Peppers",
                     "protein_raw": f"{raw_p_g}g chicken fillet (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Chicken breast / cuts", "Red bell peppers", "Yellow onions", "Olive oil & paprika"],
-                    "tip": "Toss chicken strips and sliced peppers with olive oil and paprika; roast at 200°C for 20 mins."
+                    "tip": "🥕 **High-Heat Caramelization:** Cut chicken and bell peppers into bite-sized strips. Toss on a baking sheet with olive oil, smoked paprika, salt, and black pepper in a single layer (don't crowd the pan). Roast at 200°C for 18-20 mins until the pepper edges are lightly charred and chicken is golden and tender."
                 }
             elif idx == 3:
                 dinner = {
                     "title": "Creamy Garlic Chicken & Mozzarella Pasta",
                     "protein_raw": f"{raw_p_g}g chicken fillet (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Chicken breast", "Pasta", "Garlic", "Mozzarella", "Cherry tomatoes"],
-                    "tip": "Slice cooked chicken and fold into garlic passata sauce with pasta and melted mozzarella."
+                    "tip": "🍝 **One-Skillet Sauce:** Sauté garlic and sliced chicken until golden. Add crushed tomatoes, cream/butter, and simmer 5 mins. Stir in hot al dente pasta and grated mozzarella on low heat until the sauce turns rich, glossy, and stretches with melted cheese."
                 }
             else:
                 dinner = {
                     "title": "Slow-Simmered Chicken & Vegetable Curry with Rice",
                     "protein_raw": f"{raw_p_g}g chicken (yields ~{cooked_p_g}g cooked)",
                     "ingredients": ["Chicken fillet", "Onions", "Bell peppers", "Curry spices", "Basmati rice"],
-                    "tip": "Simmer diced chicken with onions, peppers, and curry spices for 20 mins. Serve over hot basmati rice."
+                    "tip": "🍛 **Spice Blooming Secret:** Fry diced onions in oil with curry powder, turmeric, and garlic for 90 seconds until fragrant (blooming the spices). Add diced chicken to brown, then simmer with peppers and a splash of water for 15 mins on low heat until the sauce is deeply aromatic and chicken is fork-tender."
                 }
         elif has_beef:
             dinner = {
                 "title": "Hearty Beef Skillet with Bell Peppers & Rice",
                 "protein_raw": f"{raw_p_g}g ground beef (yields ~{cooked_p_g}g cooked)",
                 "ingredients": ["Ground beef", "Bell peppers", "Onions", "Rice", "Soy sauce"],
-                "tip": "Sauté onions and beef, fold in sliced peppers and simmer with rice for a fast one-pan dinner."
+                "tip": "🥩 **Crispy Mince Technique:** Cook minced beef on high heat undisturbed for 3 mins to get deep browning. Stir in sliced onions and peppers for 3 mins. Season with soy sauce and black pepper, then fold into hot basmati rice with a drizzle of toasted sesame or olive oil."
             }
         else:
             dinner = {
                 "title": "Rustic Shakshuka Dinner with Sourdough Toast",
                 "protein_raw": f"{3 * h_size} Farm eggs",
                 "ingredients": ["Eggs", "Crushed tomatoes", "Bell peppers", "Mozzarella", "Toast"],
-                "tip": "Simmer peppers in rich tomato sauce, crack in eggs and top with mozzarella. Dip warm toast."
+                "tip": "🍳 **Jammy Egg Control:** Simmer peppers and onions in rich tomato sauce until thick. Create small pockets, drop in fresh eggs, and sprinkle mozzarella around the whites. Cover tightly with a lid on low heat for exactly 4 minutes. The whites will cook through while the yolks stay rich and liquid for dipping."
             }
 
         days_data.append({
@@ -384,17 +384,17 @@ def get_day_menu_formatted(day_index=None):
         
         f"🍳 *BREAKFAST: {breakfast.get('title', 'High-Protein Breakfast')}*\n"
         f"• *Ingredients:* {', '.join(breakfast.get('ingredients', []))}\n"
-        f"• *Chef Tip:* _{breakfast.get('tip', '')}_\n\n"
+        f"👨‍🍳 *Chef Tip:*\n{breakfast.get('tip', '')}\n\n"
         
         f"🥗 *LUNCH: {lunch.get('title', 'Healthy Lunch')}*\n"
         f"• *Protein:* {lunch.get('protein_raw', 'Standard portion')}\n"
         f"• *Ingredients:* {', '.join(lunch.get('ingredients', []))}\n"
-        f"• *Chef Tip:* _{lunch.get('tip', '')}_\n\n"
+        f"👨‍🍳 *Chef Tip:*\n{lunch.get('tip', '')}\n\n"
         
         f"🍲 *DINNER: {dinner.get('title', 'Chef Dinner')}*\n"
         f"• *Protein:* {dinner.get('protein_raw', 'Standard portion')}\n"
         f"• *Ingredients:* {', '.join(dinner.get('ingredients', []))}\n"
-        f"• *Chef Tip:* _{dinner.get('tip', '')}_\n\n"
+        f"👨‍🍳 *Chef Tip:*\n{dinner.get('tip', '')}\n\n"
         
         f"🍎 *SNACK: {snack.get('title', 'Healthy Snack')}*\n"
         f"• {', '.join(snack.get('ingredients', []))}\n\n"
@@ -480,8 +480,8 @@ def get_single_meal_formatted(meal_type="lunch", day_index=None):
         f"⚖️ *Exact Food & Quantity Used:*\n" +
         "\n".join(food_breakdown) + "\n\n"
         
-        f"👨‍🍳 *Chef Preparation Tip:*\n"
-        f"_{meal.get('tip', 'Cook with care and season to taste.')}_\n\n"
+        f"👨‍🍳 *Chef Preparation & Cooking Technique:*\n"
+        f"{meal.get('tip', 'Cook with care and season to taste.')}\n\n"
         
         f"🧊 *Freshness Tier:* `{day_data.get('freshness_tier', 'Standard')}`\n"
         f"💡 _{day_data.get('freshness_alert', '')}_"
