@@ -663,22 +663,37 @@ def analyze_photo_with_vision(image_path: str, api_key: str = None) -> dict:
                 pil_img = Image.open(image_path)
                 
                 prompt = """
-You are an expert culinary vision AI, nutritionist, and smart pantry inventory auditor.
-Analyze the provided food photo with high precision.
+You are an expert culinary vision AI, nutritionist, and smart grocery pantry auditor.
+Analyze the provided photo with high precision.
 
 Determine:
-1. Is this a cooked meal plate (breakfast, lunch, dinner, snack), a pantry/fridge audit photo, or a receipt?
-2. If it is a cooked meal plate:
-   - Identify the meal type: breakfast, lunch, dinner, or snack.
-   - Descriptive gourmet dish title.
-   - Categorized composition breakdown:
-     - proteins: exact list of proteins detected (e.g. 1 Sunny-side-up egg, 3 bacon strips, 180g chicken breast)
-     - carbs: exact list of carbs/grains/breads (e.g. 2 slices toasted bread, 180g cooked basmati rice, pasta)
-     - produce: exact list of fresh fruits, vegetables & herbs (e.g. 1/2 sliced ripe avocado, cherry tomatoes, arugula)
-     - dairy_and_fats: cheeses, yogurt, butter, oils, or dressings
-   - Itemized list for pantry stock deduction (e.g. [{"name": "Farm Eggs", "qty": 1, "unit": "egg", "category": "egg"}, {"name": "Toast Bread", "qty": 2, "unit": "slice", "category": "bread"}, {"name": "Fresh Avocado", "qty": 0.5, "unit": "avocado", "category": "avocado"}, {"name": "Crispy Bacon", "qty": 3, "unit": "strips", "category": "bacon"}])
-   - Nutritional macro estimates: calories (kcal), protein_g (g), carbs_g (g), fat_g (g).
-   - Chef visual observation notes (cooking degree, crust, yolk runny/set, garnishes).
+1. What type of photo is this?
+   - "cooked_meal": A prepared/cooked meal plate or bowl ready to eat (e.g. breakfast scramble, dinner plate).
+   - "groceries_restock": Freshly bought groceries, raw food items, food packaging, pantry shelf, fridge contents, or shopping receipt.
+
+2. If it is "cooked_meal":
+   - meal_type: "breakfast", "lunch", "dinner", or "snack".
+   - dish_title: Descriptive gourmet dish title.
+   - composition:
+     - proteins: list of proteins detected (e.g. ["1 Sunny-side-up Egg (~60g)", "3 Bacon Strips (~45g)"])
+     - carbs: list of carbs/grains/breads (e.g. ["2 Slices Toast Bread (~70g)"])
+     - produce: list of fruits/vegetables/herbs (e.g. ["1/2 Sliced Avocado (~75g)"])
+     - dairy_and_fats: cheeses, butter, oils, or dressings
+   - detected_items: Itemized list of ingredients with count/weight for deduction (e.g. [{"name": "Farm Eggs", "qty": 1, "unit": "egg", "category": "egg"}, {"name": "Toast Bread", "qty": 2, "unit": "slice", "category": "bread"}])
+   - estimated_macros: {"calories": 480, "protein_g": 24, "carbs_g": 32, "fat_g": 28}
+   - chef_notes: Visual cooking observations (crust, yolk runniness, seasoning).
+
+3. If it is "groceries_restock":
+   - meal_type: "restock".
+   - dish_title: Descriptive title (e.g. "Weekly Grocery Haul & Fresh Restock").
+   - composition:
+     - proteins: list of raw/packaged proteins (e.g. ["10 Farm Eggs (1 carton)", "400g Fresh Ground Beef", "2x Chicken Breast Fillets (~600g)"])
+     - carbs: list of breads/grains (e.g. ["1 Loaf Toast Bread (500g)", "500g Basmati Rice"])
+     - produce: list of fresh fruits/vegetables (e.g. ["6 Bananas (~1kg)", "3 Ripe Avocados", "1 Tub Baby Spinach (100g)"])
+     - dairy_and_fats: milk, cheeses, butter (e.g. ["1L Whole Milk 2.5%", "200g Mozzarella Cheese"])
+   - detected_items: Itemized list of NEW products to add into pantry memory with EXACT quantities (e.g. [{"name": "Farm Eggs", "qty": 10, "unit": "egg", "category": "protein"}, {"name": "Bacon", "qty": 2, "unit": "pack", "category": "protein"}, {"name": "Fresh Avocado", "qty": 3, "unit": "pieces", "category": "produce"}, {"name": "Toast Bread", "qty": 1, "unit": "loaf", "category": "bread"}])
+   - estimated_macros: {}
+   - chef_notes: Inventory summary of the restocked items.
 
 Respond ONLY with a valid JSON object matching this schema:
 {
@@ -748,6 +763,96 @@ Respond ONLY with a valid JSON object matching this schema:
         "confidence": "high",
         "chef_notes": "Detected 1 fried egg on toast, 1 extra toast slice, sliced avocado (~1/2 avocado), and crispy bacon."
     }
+
+def restock_pantry_from_detected_items(detected_items: list, source: str = "photo_stock", photo_path: str = None) -> tuple[str, list]:
+    """Adds all detected new grocery products to pantry memory, assuming they are NEW items not previously counted."""
+    pantry = load_pantry_memory()
+    now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    
+    added_summary = []
+    
+    for it in detected_items:
+        if isinstance(it, dict):
+            raw_name = it.get("name", "Unknown Item")
+            qty = it.get("qty", 1)
+            unit = it.get("unit", "")
+            cat = it.get("category", "").lower()
+        else:
+            raw_name = str(it)
+            qty = 1
+            unit = ""
+            cat = ""
+            
+        try:
+            qty_num = float(qty)
+            if qty_num.is_integer():
+                qty_num = int(qty_num)
+        except Exception:
+            qty_num = 1
+
+        name_lower = raw_name.lower()
+        matched = False
+        
+        # Categorize into staples, proteins, produce/dairy
+        is_staple = any(w in name_lower or w in cat for w in ["sibul", "onion", "õli", "oil", "sool", "salt", "pipar", "pepper", "jahu", "flour", "riis", "rice", "pasta", "spagett", "sauce", "kaste", "garlic", "küüslauk", "pärm", "yeast", "bread", "toast", "sai", "leib"])
+        is_protein = any(w in name_lower or w in cat for w in ["muna", "egg", "hakkliha", "kana", "broileri", "filee", "veis", "kala", "lõhe", "beef", "chicken", "meat", "pork", "tofu", "bacon", "peekon", "salmon", "ham"])
+        
+        if is_staple:
+            target_list = pantry.setdefault("staples", [])
+        elif is_protein:
+            target_list = pantry.setdefault("proteins", [])
+        else:
+            target_list = pantry.setdefault("produce", [])
+        
+        # Match existing item
+        for entry in target_list:
+            e_name = entry.get("name", "").lower()
+            if name_lower in e_name or e_name in name_lower or (is_protein and "egg" in name_lower and "egg" in e_name):
+                old_qty = entry.get("qty", 0)
+                entry["qty"] = round(old_qty + qty_num, 2)
+                if isinstance(entry["qty"], float) and entry["qty"].is_integer():
+                    entry["qty"] = int(entry["qty"])
+                entry["last_restocked"] = now_str
+                matched = True
+                unit_str = f" {unit}" if unit else ""
+                added_summary.append(f"• ➕ `{entry['name']}`: **+{qty_num}{unit_str}** (Updated Stock: **{entry['qty']}**)")
+                break
+                
+        if not matched:
+            new_entry = {
+                "name": raw_name.strip().title(),
+                "qty": qty_num,
+                "unit": unit,
+                "category": cat or ("fresh_protein" if is_protein else ("long_term_staple" if is_staple else "produce_or_dairy")),
+                "added_at": now_str
+            }
+            target_list.append(new_entry)
+            unit_str = f" {unit}" if unit else ""
+            added_summary.append(f"• 🆕 `{new_entry['name']}`: **+{qty_num}{unit_str}** (New in Pantry: **{qty_num}**)")
+            
+    # Record in purchase history
+    if "purchase_history" not in pantry:
+        pantry["purchase_history"] = []
+        
+    pantry["purchase_history"].append({
+        "timestamp": now_str,
+        "type": "photo_restock",
+        "source": source,
+        "photo_file": os.path.basename(photo_path) if photo_path else None,
+        "items": detected_items
+    })
+    
+    save_pantry_memory(pantry)
+    
+    summary_text = "\n".join(added_summary) if added_summary else "• (No items identified to restock)"
+    text = (
+        f"📦 *Pantry Restock Successful!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"All products in the image have been counted as **new inventory** and added to your pantry memory:\n\n"
+        f"{summary_text}\n\n"
+        f"🏠 *Check Stock:* Tap `/pantry` to view all active inventory."
+    )
+    return text, added_summary
 
 def deduct_custom_ingredients(detected_items, meal_type="breakfast", dish_title="Cooked Meal", photo_path=None):
     """Accurately deducts the exact ingredients detected from an uploaded photo or manual selection

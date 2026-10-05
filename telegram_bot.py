@@ -51,6 +51,7 @@ from wolt_manager import (
     log_meal_consumption,
     analyze_photo_with_vision,
     deduct_custom_ingredients,
+    restock_pantry_from_detected_items,
     generate_ai_recipe,
     generate_weekly_meal_plan,
     generate_default_weekly_plan,
@@ -744,10 +745,21 @@ async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auth_guard
 async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Adjusts specific stock levels in virtual pantry memory: /stock eggs 10"""
+    """Adjusts specific stock levels or instructs how to restock via photo: /stock eggs 10"""
     args = context.args if context.args else []
     if not args:
-        await reply_safe(update, context, "Usage: `/stock eggs 10` or `/stock bacon 2`")
+        help_stock_msg = (
+            "📦 *Pantry Stock & Grocery Restock Guide:*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "📸 **Photo Restock:** Send or take a photo of your new grocery haul, receipt, or fridge shelf with the caption `/stock`.\n"
+            "_(Gemini Vision will automatically identify every item and add them as **new inventory** into your pantry!)_\n\n"
+            "✏️ **Manual Stock Adjustment:**\n"
+            "• `/stock eggs 10` (sets eggs to 10)\n"
+            "• `/stock chicken 2`\n"
+            "• `/stock avocado 3`\n\n"
+            "🏠 Tap `/pantry` to view your current virtual inventory."
+        )
+        await reply_safe(update, context, help_stock_msg)
         return
     
     item_name = args[0].lower()
@@ -770,6 +782,14 @@ async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pr["qty"] = qty_val
                 matched = True
                 break
+
+    # Check in staples
+    if not matched:
+        for s in pantry.get("staples", []):
+            if item_name in s.get("name", "").lower():
+                s["qty"] = qty_val
+                matched = True
+                break
                 
     if not matched:
         pantry.setdefault("proteins", []).append({
@@ -783,10 +803,13 @@ async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auth_guard
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles uploaded meal plates or pantry photos with vision AI analysis."""
+    """Handles uploaded meal plates or grocery restock photos with vision AI analysis."""
     if not update.message or not update.message.photo:
         return
     photo = update.message.photo[-1]
+    caption = (update.message.caption or "").strip()
+    is_stock_caption = "/stock" in caption.lower() or caption.lower().startswith("stock") or "restock" in caption.lower()
+
     msg = await reply_safe(update, context, "📸 Analyzing photo with culinary vision AI & checking pantry memory...")
     
     # Save photo to local scratch directory
@@ -807,7 +830,21 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = res.get("detected_items", [])
     macros = res.get("estimated_macros", {})
     notes = res.get("chef_notes", "")
+    photo_type = res.get("type", "cooked_meal")
     
+    # If the user explicitly supplied /stock in caption or if detected as grocery restock:
+    if is_stock_caption or photo_type == "groceries_restock":
+        restock_text, added_summary = restock_pantry_from_detected_items(items, source="photo_stock_caption", photo_path=save_path)
+        keyboard = [
+            [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
+        ]
+        if msg:
+            await edit_safe(msg, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await reply_safe(update, context, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
     comp_lines = []
     if comp.get("proteins"):
         comp_lines.append(f"• 🥩 *Proteins:* {', '.join(comp['proteins'])}")
@@ -821,27 +858,30 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     comp_text = "\n".join(comp_lines) if comp_lines else "\n".join([f"• `{it.get('qty')} {it.get('name')}`" for it in items])
     
     text = (
-        f"📸 *Real Meal Composition & Visual Audit (Gemini Vision)*\n"
+        f"📸 *Food & Inventory Recognition (Gemini Vision)*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"🍽️ *Identified Dish:* **{dish_title}**\n"
-        f"🕒 *Meal Category:* `{meal_type}`\n\n"
-        f"🔍 *Visual Composition Detected:*\n"
-        f"{comp_text}\n\n"
-        f"📊 *Estimated Nutrition & Macros:*\n"
-        f"🔥 **Calories:** ~{macros.get('calories', 480)} kcal\n"
-        f"🥩 **Protein:** ~{macros.get('protein_g', 24)}g | 🍞 **Carbs:** ~{macros.get('carbs_g', 32)}g | 🥑 **Fat:** ~{macros.get('fat_g', 28)}g\n"
+        f"🍽️ *Identified Items:* **{dish_title}**\n\n"
+        f"🔍 *Visual Breakdown Detected:*\n"
+        f"{comp_text}\n"
     )
+    if macros and macros.get("calories"):
+        text += (
+            f"\n📊 *Estimated Nutrition & Macros:*\n"
+            f"🔥 **Calories:** ~{macros.get('calories', 480)} kcal\n"
+            f"🥩 **Protein:** ~{macros.get('protein_g', 24)}g | 🍞 **Carbs:** ~{macros.get('carbs_g', 32)}g | 🥑 **Fat:** ~{macros.get('fat_g', 28)}g\n"
+        )
     if notes:
         text += f"\n👨‍🍳 *Chef Visual Notes:*\n_{notes}_\n"
         
-    text += "\n👇 *Tap below to confirm and deduct what was actually eaten from your pantry:*"
+    text += "\n👇 *Choose an action for this photo:*"
     
     keyboard = [
         [
-            InlineKeyboardButton("✅ Deduct Exact Food Used", callback_data="btn_confirm_photo_deduct")
+            InlineKeyboardButton("📦 Restock Pantry (+ Add All As New)", callback_data="btn_confirm_photo_restock"),
+            InlineKeyboardButton("✅ Deduct Food Eaten", callback_data="btn_confirm_photo_deduct")
         ],
         [
-            InlineKeyboardButton("🍳 It's Breakfast", callback_data="btn_photo_type_breakfast"),
+            InlineKeyboardButton("🍳 Breakfast", callback_data="btn_photo_type_breakfast"),
             InlineKeyboardButton("🥗 Lunch", callback_data="btn_photo_type_lunch"),
             InlineKeyboardButton("🍲 Dinner", callback_data="btn_photo_type_dinner")
         ],
@@ -1031,6 +1071,19 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences())
         save_meal_plan(new_plan)
         await query_edit_safe(query, "💾 *Success!* Items have been recorded into your virtual pantry memory and your weekly meal plan is now 100% synchronized with your groceries!")
+    elif data == "btn_confirm_photo_restock":
+        pending = user_pending_photo_meal.get(user_id)
+        if pending:
+            d = pending.get("data", {})
+            items = d.get("detected_items", [])
+            text, _ = restock_pantry_from_detected_items(items, source="photo_button_restock", photo_path=pending.get("path"))
+            keyboard = [
+                [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
+                [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
+            ]
+            await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await query.message.reply_text("ℹ️ No pending photo found. Send a fresh photo with `/stock` anytime!")
     elif data == "btn_confirm_photo_deduct":
         pending = user_pending_photo_meal.get(user_id)
         if pending:
