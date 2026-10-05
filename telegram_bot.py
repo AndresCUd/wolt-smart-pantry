@@ -48,6 +48,8 @@ from wolt_manager import (
     get_day_menu_formatted,
     get_single_meal_formatted,
     log_meal_consumption,
+    analyze_photo_with_vision,
+    deduct_custom_ingredients,
     generate_weekly_meal_plan,
     generate_default_weekly_plan,
     get_candidate_grocery_list,
@@ -84,8 +86,9 @@ except Exception:
     BOT_TIMEZONE = pytz.timezone("Europe/Tallinn")
 DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 
-# Temporary in-memory session cache for pending shopping proposals per user
+# Temporary in-memory session cache for pending shopping proposals and photo meals per user
 user_pending_plans = {}
+user_pending_photo_meal = {}
 
 def is_authorized(user_id: int) -> bool:
     """Checks if the given Telegram user ID is authorized."""
@@ -576,12 +579,86 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_safe(update, context, f"⚠️ Error reading logs: {e}")
 
 @auth_guard
+async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Configures or updates GEMINI_API_KEY for vision AI recognition: /setkey <key>"""
+    args = context.args if context.args else []
+    if not args:
+        current_status = "Configured" if os.getenv("GEMINI_API_KEY") else "Not configured"
+        await reply_safe(update, context, f"🔑 *Gemini API Key Status:* `{current_status}`\n\nTo configure, run:\n`/setkey AIzaSy...`\n\n_(Get a free key at https://aistudio.google.com)_")
+        return
+    
+    key = args[0].strip()
+    os.environ["GEMINI_API_KEY"] = key
+    
+    # Save to .env file
+    env_file = os.path.join(BASE_DIR, ".env")
+    lines = []
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            
+    key_found = False
+    new_lines = []
+    for line in lines:
+        if line.startswith("GEMINI_API_KEY="):
+            new_lines.append(f"GEMINI_API_KEY={key}\n")
+            key_found = True
+        else:
+            new_lines.append(line)
+    if not key_found:
+        new_lines.append(f"\nGEMINI_API_KEY={key}\n")
+        
+    with open(env_file, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+        
+    await reply_safe(update, context, "✅ *Gemini API Key Saved!* Visual meal photo recognition & pantry photo audits are now 100% automated with Gemini 3.8 Flash.")
+
+@auth_guard
+async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Adjusts specific stock levels in virtual pantry memory: /stock eggs 10"""
+    args = context.args if context.args else []
+    if not args:
+        await reply_safe(update, context, "Usage: `/stock eggs 10` or `/stock bacon 2`")
+        return
+    
+    item_name = args[0].lower()
+    qty_val = int(args[1]) if len(args) > 1 and args[1].isdigit() else 1
+    
+    pantry = load_pantry_memory()
+    matched = False
+    
+    # Check in proteins
+    for p in pantry.get("proteins", []):
+        if item_name in p.get("name", "").lower():
+            p["qty"] = qty_val
+            matched = True
+            break
+            
+    # Check in produce
+    if not matched:
+        for pr in pantry.get("produce", []):
+            if item_name in pr.get("name", "").lower():
+                pr["qty"] = qty_val
+                matched = True
+                break
+                
+    if not matched:
+        pantry.setdefault("proteins", []).append({
+            "name": item_name.capitalize(),
+            "qty": qty_val,
+            "category": "manual_stock"
+        })
+        
+    save_pantry_memory(pantry)
+    await reply_safe(update, context, f"✅ *Stock Updated:* `{item_name.capitalize()}` is now set to **{qty_val}** in pantry memory.")
+
+@auth_guard
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles uploaded kitchen/fridge photos from Telegram."""
+    """Handles uploaded meal plates or pantry photos with vision AI analysis."""
     if not update.message or not update.message.photo:
         return
     photo = update.message.photo[-1]
-    msg = await reply_safe(update, context, "📸 Photo received! Auditing kitchen stock & calculating meal gap...")
+    msg = await reply_safe(update, context, "📸 Analyzing photo with culinary vision AI & checking pantry memory...")
     
     # Save photo to local scratch directory
     os.makedirs("scratch", exist_ok=True)
@@ -590,8 +667,55 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await photo_file.download_to_drive(save_path)
     logger.info(f"Saved uploaded photo to: {save_path}")
 
-    # Forward to plan calculation
-    await plan_command(update, context)
+    # Analyze with Vision AI
+    res = await asyncio.to_thread(analyze_photo_with_vision, save_path)
+    user_id = update.effective_user.id if update.effective_user else 0
+    user_pending_photo_meal[user_id] = {"path": save_path, "data": res}
+    
+    dish_title = res.get("dish_title", "Cooked Meal")
+    meal_type = res.get("meal_type", "breakfast").capitalize()
+    items = res.get("detected_items", [])
+    macros = res.get("estimated_macros", {})
+    notes = res.get("chef_notes", "")
+    
+    items_text = ""
+    for it in items:
+        unit = f" {it.get('unit')}" if it.get('unit') else ""
+        items_text += f"• `{it.get('qty')}{unit} {it.get('name')}`\n"
+        
+    text = (
+        f"📸 *Visual Food Recognition & Stock Audit*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🍽️ *Identified Meal:* **{dish_title}**\n"
+        f"🕒 *Meal Category:* `{meal_type}`\n\n"
+        f"⚖️ *Ingredients & Quantities Detected:*\n"
+        f"{items_text}\n"
+        f"🔥 *Nutrition:* ~{macros.get('calories', 450)} kcal | {macros.get('protein_g', 22)}g Protein\n"
+    )
+    if notes:
+        text += f"\n💡 _{notes}_\n"
+        
+    text += "\n👇 *Tap below to confirm and deduct what was actually eaten from your pantry:*"
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Deduct Exact Food Used", callback_data="btn_confirm_photo_deduct")
+        ],
+        [
+            InlineKeyboardButton("🍳 It's Breakfast", callback_data="btn_photo_type_breakfast"),
+            InlineKeyboardButton("🥗 Lunch", callback_data="btn_photo_type_lunch"),
+            InlineKeyboardButton("🍲 Dinner", callback_data="btn_photo_type_dinner")
+        ],
+        [
+            InlineKeyboardButton("📦 Audit Pantry Stock (Pantry Photo)", callback_data="btn_plan"),
+            InlineKeyboardButton("❌ Discard", callback_data="btn_cancel_photo")
+        ]
+    ]
+    
+    if msg:
+        await msg.edit_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -765,6 +889,45 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences())
         save_meal_plan(new_plan)
         await query.edit_message_text("💾 *Success!* Items have been recorded into your virtual pantry memory and your weekly meal plan is now 100% synchronized with your groceries!")
+    elif data == "btn_confirm_photo_deduct":
+        pending = user_pending_photo_meal.get(user_id)
+        if pending:
+            d = pending.get("data", {})
+            text, _ = deduct_custom_ingredients(
+                d.get("detected_items", []),
+                meal_type=d.get("meal_type", "breakfast"),
+                dish_title=d.get("dish_title", "Cooked Meal"),
+                photo_path=pending.get("path")
+            )
+            keyboard = [
+                [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+                [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+            ]
+            await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await query.message.reply_text("ℹ️ No pending photo meal found. Send a fresh photo anytime!")
+    elif data in ["btn_photo_type_breakfast", "btn_photo_type_lunch", "btn_photo_type_dinner"]:
+        meal_type = "breakfast" if data == "btn_photo_type_breakfast" else ("lunch" if data == "btn_photo_type_lunch" else "dinner")
+        pending = user_pending_photo_meal.get(user_id)
+        if pending:
+            d = pending.get("data", {})
+            d["meal_type"] = meal_type
+            text, _ = deduct_custom_ingredients(
+                d.get("detected_items", []),
+                meal_type=meal_type,
+                dish_title=d.get("dish_title", "Cooked Meal"),
+                photo_path=pending.get("path")
+            )
+            keyboard = [
+                [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+                [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+            ]
+            await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            text, _ = log_meal_consumption(meal_type)
+            await query.message.reply_text(text, parse_mode="Markdown")
+    elif data == "btn_cancel_photo":
+        await query.edit_message_text("❌ Meal photo discarded.")
     elif data == "btn_cancel_plan":
         await query.edit_message_text("❌ Meal plan cancelled.")
 
@@ -807,6 +970,9 @@ def main():
     app.add_handler(CommandHandler("dinner", dinner_command))
     app.add_handler(CommandHandler("snack", snack_command))
     app.add_handler(CommandHandler("eat", eat_command))
+    app.add_handler(CommandHandler("setkey", setkey_command))
+    app.add_handler(CommandHandler("stock", setstock_command))
+    app.add_handler(CommandHandler("eggs", setstock_command))
     app.add_handler(CommandHandler("preferences", preferences_command))
     app.add_handler(CommandHandler("pref", preferences_command))
     app.add_handler(CommandHandler("pantry", pantry_command))

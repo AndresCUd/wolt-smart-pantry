@@ -1,0 +1,178 @@
+{
+  "last_updated": "2026-10-05T08:41:54",
+  "staples": [
+    {
+      "name": "Tellicherry Black Pepper Grinder",
+      "qty": 1,
+      "category": "long_term_staple",
+      "last_purchased": "2026-10-05T08:22:00",
+      "estimated_weeks": 8
+    },
+    {
+      "name": "Spices (Koriander, Kurkuma, Piri-Piri, Salt)",
+      "qty": 4,
+      "category": "long_term_staple",
+      "last_purchased": "2026-10-05T08:22:00",
+      "estimated_weeks": 8
+    },
+    {
+      "name": "Reggia Spaghetti / Pasta 500g",
+      "qty": 1,
+      "category": "long_term_staple",
+      "last_purchased": "2026-10-05T08:22:00",
+      "estimated_weeks": 3
+    },
+    {
+      "name": "Pesto Genovese Jar",
+      "qty": 1,
+      "category": "long_term_staple",
+      "last_purchased": "2026-10-05T08:22:00",
+      "estimated_weeks": 2
+    },
+    {
+      "name": "Poco Loco Soft Tortillas 8tk",
+      "qty": 1,
+      "category": "long_term_staple",
+      "last_purchased": "2026-10-05T08:22:00",
+      "estimated_weeks": 2
+    },
+    {
+      "name": "Sante Granola Fruit 350g",
+      "qty": 1,
+      "category": "long_term_staple",
+      "last_purchased": "2026-10-05T08:22:00",
+      "estimated_weeks": 2
+    }
+  ],
+  "proteins": [
+    {
+      "name": "Tuna in Brine Cans 80g",
+      "qty": 4,
+      "category": "canned_protein",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 90
+    },
+    {
+      "name": "Farm Eggs",
+      "qty": 9,
+      "category": "fresh_protein",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 10
+    },
+    {
+      "name": "Rakvere Pelmeenid Broilerilihaga (Chicken dumplings)",
+      "qty": 1,
+      "category": "freezer_protein",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 60
+    },
+    {
+      "name": "Serrano Ham & Bacon",
+      "qty": 2,
+      "category": "cured_protein",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 7
+    }
+  ],
+  "produce": [
+    {
+      "name": "Greek Yogurt Tub (Large)",
+      "qty": 1,
+      "category": "dairy",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 7
+    },
+    {
+      "name": "Alma Piim (Milk) 1L",
+      "qty": 1,
+      "category": "dairy",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 5
+    },
+    {
+      "name": "Rimi Vahukoor 35% Cream 200ml",
+      "qty": 1,
+      "category": "dairy",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 6
+    },
+    {
+      "name": "Casa Azzurra Parmigiano Reggiano 60g",
+      "qty": 1,
+      "category": "cheese",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 14
+    },
+    {
+      "name": "Grated Mozzarella Cheese",
+      "qty": 1,
+      "category": "cheese",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 7
+    },
+    {
+      "name": "Maahärra Marjasegu (Frozen Berries 300g)",
+      "qty": 1,
+      "category": "freezer_produce",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 90
+    },
+    {
+      "name": "Härmavili / Maahärra Wok Veggies (2 bags)",
+      "qty": 2,
+      "category": "freezer_produce",
+      "purchased_at": "2026-10-05T08:22:00",
+      "shelf_life_days": 90
+    }
+  ],
+  "purchase_history": [
+    {
+      "timestamp": "2026-10-05T08:22:00",
+      "store": "Initial Kitchen Audit (Photo Scan)",
+      "items": [
+        {
+          "name": "Tuna in Brine Cans",
+          "qty": 4
+        },
+        {
+          "name": "Reggia Spaghetti 500g",
+          "qty": 1
+        },
+        {
+          "name": "Greek Yogurt Tub",
+          "qty": 1
+        },
+        {
+          "name": "Poco Loco Tortillas 8tk",
+          "qty": 1
+        },
+        {
+          "name": "Rakvere Broileripelmeenid",
+          "qty": 1
+        },
+        {
+          "name": "Frozen Berries & Wok Mix",
+          "qty": 3
+        },
+        {
+          "name": "Parmigiano Reggiano & Mozzarella",
+          "qty": 2
+        }
+      ]
+    }
+  ],
+  "consumption_history": [
+    {
+      "timestamp": "2026-10-05T08:41:54",
+      "meal_type": "breakfast",
+      "title": "Fried Egg on Toast with Sliced Avocado & Crispy Bacon",
+      "food_used": [
+        "1 Farm Egg",
+        "2 slices Toast Bread",
+        "1/2 Avocado",
+        "3 Crispy Bacon Strips"
+      ],
+      "source": "photo_vision_analysis"
+    }
+  ]
+}
