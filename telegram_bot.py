@@ -18,7 +18,8 @@ load_dotenv()
 from telegram import (
     Update,
     InlineKeyboardButton,
-    InlineKeyboardMarkup
+    InlineKeyboardMarkup,
+    BotCommand
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -943,6 +944,34 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
 
+async def post_init(application):
+    """Registers bot autocomplete command suggestions with Telegram API."""
+    commands = [
+        BotCommand("today", "🌅 Today's scheduled meals, portions & tips"),
+        BotCommand("menu", "🌅 View today's full menu"),
+        BotCommand("breakfast", "🍳 View breakfast food quantities & tips"),
+        BotCommand("lunch", "🥗 View lunch ingredients & portions"),
+        BotCommand("dinner", "🍲 View dinner ingredients & portions"),
+        BotCommand("snack", "🍎 View today's healthy snack"),
+        BotCommand("eat", "✅ Log a meal & deduct ingredients (/eat breakfast)"),
+        BotCommand("week", "📅 Browse 7-day scheduled meal plan"),
+        BotCommand("plan", "📋 Generate 7-day meal plan & Wolt cart list"),
+        BotCommand("pref", "👤 Dietary profile, allergies & household size"),
+        BotCommand("pantry", "🏠 View virtual pantry memory & stock"),
+        BotCommand("stock", "📦 Adjust ingredient stock (/stock eggs 10)"),
+        BotCommand("deals", "🏷️ Scan live discount deals on Wolt"),
+        BotCommand("cart", "🛒 Build Wolt cart directly (/cart Banaan:6)"),
+        BotCommand("setkey", "🔑 Configure Gemini API key for photo vision"),
+        BotCommand("logs", "📜 View live system logs on PC (/logs 25)"),
+        BotCommand("help", "📖 View complete command guide"),
+        BotCommand("start", "👋 Welcome dashboard & main menu")
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+        logger.info("Bot command autocomplete menu successfully registered with Telegram API.")
+    except Exception as e:
+        logger.warning(f"Failed to register bot commands with Telegram API: {e}")
+
 def main():
     """Main application entry point."""
     if not BOT_TOKEN:
@@ -957,7 +986,7 @@ def main():
     else:
         logger.warning("[!] TELEGRAM_ALLOWED_USERS is empty. Bot will accept commands from any user.")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
 
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
