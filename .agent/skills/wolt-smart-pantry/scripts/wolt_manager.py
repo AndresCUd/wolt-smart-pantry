@@ -404,6 +404,171 @@ def get_day_menu_formatted(day_index=None):
     )
     return text, day_data
 
+def get_single_meal_formatted(meal_type="lunch", day_index=None):
+    """Returns a rich formatted text message focusing on a single meal with exact food breakdown and weights."""
+    plan = load_meal_plan()
+    days = plan.get("days", [])
+    if not days:
+        plan = generate_weekly_meal_plan()
+        days = plan.get("days", [])
+        save_meal_plan(plan)
+        
+    now = datetime.now()
+    if day_index is None:
+        day_index = now.weekday()
+        
+    day_index = max(0, min(6, day_index))
+    day_data = days[day_index] if day_index < len(days) else days[0]
+    
+    date_str = now.strftime("%A, %b %d")
+    h_size = plan.get("household_size", 1)
+    meal_type = meal_type.lower()
+    
+    emoji_map = {
+        "breakfast": "🍳",
+        "lunch": "🥗",
+        "dinner": "🍲",
+        "snack": "🍎"
+    }
+    emoji = emoji_map.get(meal_type, "🍽️")
+    meal = day_data.get(meal_type, day_data.get("lunch", {}))
+    
+    # Generate exact food breakdown with grams and units
+    food_breakdown = []
+    if meal_type == "breakfast":
+        food_breakdown = [
+            f"• 🥚 *Farm Eggs:* {3 * h_size} eggs (~{180 * h_size}g raw)",
+            f"• 🍞 *Toast Bread:* {2 * h_size} slices (~{70 * h_size}g, Eesti Pagar Tosta)",
+            f"• 🥑 *Fresh Avocado:* ~{0.5 * h_size:.1f} avocado (~{75 * h_size}g)",
+            f"• 🧈 *Butter / Olive Oil:* ~{10 * h_size}g"
+        ]
+    elif meal_type == "lunch":
+        raw_g = int(215 * h_size)
+        cooked_g = int(150 * h_size)
+        protein_raw = meal.get("protein_raw", f"{raw_g}g protein")
+        food_breakdown = [
+            f"• 🥩 *Protein (Raw):* {protein_raw}",
+            f"• 🍳 *Cooked Yield Target:* ~{cooked_g}g cooked",
+            f"• 🍚 *Grains / Carbs:* ~{70 * h_size}g dry Basmati rice (yields ~{200 * h_size}g cooked)",
+            f"• 🫑 *Fresh Produce:* 1 Red bell pepper (~150g) + 1/2 Yellow onion (~60g)",
+            f"• 🧄 *Seasoning:* 1 clove garlic, 15ml low-sodium soy sauce"
+        ]
+    elif meal_type == "dinner":
+        raw_g = int(215 * h_size)
+        cooked_g = int(150 * h_size)
+        protein_raw = meal.get("protein_raw", f"{raw_g}g protein")
+        food_breakdown = [
+            f"• 🍗 *Protein (Raw):* {protein_raw}",
+            f"• 🍳 *Cooked Yield Target:* ~{cooked_g}g cooked",
+            f"• 🥬 *Delicate Greens:* ~{40 * h_size}g Fresh Arugula / Rocket",
+            f"• 🍅 *Cherry Tomatoes:* ~{80 * h_size}g (5-6 ripe cherry tomatoes)",
+            f"• 🧀 *Cheese:* ~{30 * h_size}g Grated Mozzarella / Parmigiano",
+            f"• 🫒 *Fats & Dressing:* 10ml Extra Virgin Olive Oil + Fresh Lemon Juice"
+        ]
+    else: # Snack
+        food_breakdown = [
+            f"• 🍌 *Fruit:* {1 * h_size} Fresh Banana (~120g)",
+            f"• 🍫 *Dark Chocolate:* {2 * h_size} squares 70%+ dark chocolate (~20g)"
+        ]
+
+    text = (
+        f"{emoji} *{meal_type.upper()}: {meal.get('title', 'Meal')}*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 *Date:* {date_str} (Day {day_index + 1}/7)\n"
+        f"👥 *Portions:* {h_size} person(s)\n\n"
+        
+        f"⚖️ *Exact Food & Quantity Used:*\n" +
+        "\n".join(food_breakdown) + "\n\n"
+        
+        f"👨‍🍳 *Chef Preparation Tip:*\n"
+        f"_{meal.get('tip', 'Cook with care and season to taste.')}_\n\n"
+        
+        f"🧊 *Freshness Tier:* `{day_data.get('freshness_tier', 'Standard')}`\n"
+        f"💡 _{day_data.get('freshness_alert', '')}_"
+    )
+    return text, meal
+
+def log_meal_consumption(meal_type="lunch", day_index=None):
+    """Records meal consumption, deducts used ingredients from virtual pantry memory,
+    and returns a breakdown of food used and remaining inventory."""
+    plan = load_meal_plan()
+    days = plan.get("days", [])
+    now = datetime.now()
+    if day_index is None:
+        day_index = now.weekday()
+    day_index = max(0, min(6, day_index))
+    day_data = days[day_index] if day_index < len(days) else (days[0] if days else {})
+    
+    h_size = plan.get("household_size", 1)
+    meal = day_data.get(meal_type, {})
+    meal_title = meal.get("title", f"{meal_type.capitalize()}")
+    
+    pantry = load_pantry_memory()
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
+    
+    # Determine used food items
+    used_summary = []
+    low_stock_alerts = []
+    
+    if meal_type == "breakfast":
+        eggs_used = 3 * h_size
+        used_summary = [f"{eggs_used} Farm Eggs", f"{2 * h_size} slices Toast Bread", f"1/2 Avocado", "10g Butter"]
+        # Deduct eggs
+        egg_entry = next((p for p in pantry.get("proteins", []) if "egg" in p.get("name", "").lower() or "muna" in p.get("name", "").lower()), None)
+        if egg_entry:
+            current_qty = egg_entry.get("qty", 10)
+            remaining_eggs = max(0, current_qty - eggs_used)
+            egg_entry["qty"] = remaining_eggs
+            if remaining_eggs <= 2:
+                low_stock_alerts.append(f"⚠️ *Eggs Low:* Only {remaining_eggs} egg(s) left in fridge!")
+    elif meal_type in ["lunch", "dinner"]:
+        raw_meat_g = int(215 * h_size)
+        cooked_meat_g = int(150 * h_size)
+        used_summary = [
+            f"{raw_meat_g}g raw protein (~{cooked_meat_g}g cooked yield)",
+            f"{150 * h_size}g fresh vegetables",
+            f"{70 * h_size}g carbs / grains",
+            f"10ml olive oil / seasoning"
+        ]
+        # Deduct protein
+        if pantry.get("proteins"):
+            p_entry = pantry["proteins"][0]
+            curr_q = p_entry.get("qty", 1)
+            p_entry["qty"] = max(0, curr_q - 1)
+            if p_entry["qty"] == 0:
+                low_stock_alerts.append(f"⚠️ *Protein Used Up:* `{p_entry.get('name')}` is now finished!")
+    else: # Snack
+        used_summary = [f"{1 * h_size} Fresh Banana", f"20g Dark Chocolate"]
+        
+    if "consumption_history" not in pantry:
+        pantry["consumption_history"] = []
+        
+    pantry["consumption_history"].append({
+        "timestamp": now_str,
+        "meal_type": meal_type,
+        "title": meal_title,
+        "food_used": used_summary
+    })
+    
+    save_pantry_memory(pantry)
+    
+    text = (
+        f"✅ *Meal Logged: {meal_type.upper()}*\n"
+        f"🍽️ *Dish:* {meal_title}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚖️ *Food Quantities Deducted:*\n"
+    )
+    for u in used_summary:
+        text += f"• `{u}`\n"
+        
+    if low_stock_alerts:
+        text += "\n🚨 *Inventory Stock Alerts:*\n"
+        for alert in low_stock_alerts:
+            text += f"{alert}\n"
+            
+    text += f"\n📦 *Pantry Memory Updated:* View remaining items with `/pantry`."
+    return text, used_summary
+
 def load_pantry_memory():
     """Loads virtual pantry memory state from disk or creates an initial structure."""
     if os.path.exists(PANTRY_MEMORY_FILE):

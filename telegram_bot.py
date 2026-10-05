@@ -46,6 +46,8 @@ from wolt_manager import (
     load_meal_plan,
     save_meal_plan,
     get_day_menu_formatted,
+    get_single_meal_formatted,
+    log_meal_consumption,
     generate_weekly_meal_plan,
     generate_default_weekly_plan,
     get_candidate_grocery_list,
@@ -180,16 +182,77 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, day_data = get_day_menu_formatted()
     keyboard = [
         [
-            InlineKeyboardButton("🔄 Swap Today's Meal", callback_data="btn_swap_meal"),
-            InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan")
+            InlineKeyboardButton("🍳 Breakfast", callback_data="btn_view_breakfast"),
+            InlineKeyboardButton("🥗 Lunch", callback_data="btn_view_lunch"),
+            InlineKeyboardButton("🍲 Dinner", callback_data="btn_view_dinner")
         ],
         [
-            InlineKeyboardButton("🛒 Wolt Grocery Plan", callback_data="btn_plan"),
+            InlineKeyboardButton("✅ Log Breakfast", callback_data="btn_eat_breakfast"),
+            InlineKeyboardButton("✅ Log Lunch", callback_data="btn_eat_lunch"),
+            InlineKeyboardButton("✅ Log Dinner", callback_data="btn_eat_dinner")
+        ],
+        [
+            InlineKeyboardButton("🔄 Swap Meal", callback_data="btn_swap_meal"),
+            InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan"),
             InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await reply_safe(update, context, text, reply_markup=reply_markup)
+
+@auth_guard
+async def breakfast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays today's breakfast with exact food quantities, weights, and chef tips."""
+    text, meal = get_single_meal_formatted("breakfast")
+    keyboard = [
+        [InlineKeyboardButton("✅ Log Breakfast Eaten (Deduct Stock)", callback_data="btn_eat_breakfast")],
+        [InlineKeyboardButton("🥗 View Lunch", callback_data="btn_view_lunch"), InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
+    ]
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
+async def lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays today's lunch with raw-to-cooked shrinkage math, exact ingredients & tips."""
+    text, meal = get_single_meal_formatted("lunch")
+    keyboard = [
+        [InlineKeyboardButton("✅ Log Lunch Eaten (Deduct Stock)", callback_data="btn_eat_lunch")],
+        [InlineKeyboardButton("🍲 View Dinner", callback_data="btn_view_dinner"), InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
+    ]
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
+async def dinner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays today's dinner with exact ingredients & chef tips."""
+    text, meal = get_single_meal_formatted("dinner")
+    keyboard = [
+        [InlineKeyboardButton("✅ Log Dinner Eaten (Deduct Stock)", callback_data="btn_eat_dinner")],
+        [InlineKeyboardButton("🍎 View Snack", callback_data="btn_view_snack"), InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
+    ]
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
+async def snack_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays today's snack with exact food breakdown."""
+    text, meal = get_single_meal_formatted("snack")
+    keyboard = [
+        [InlineKeyboardButton("✅ Log Snack Eaten", callback_data="btn_eat_snack")],
+        [InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
+    ]
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
+async def eat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Logs a meal as consumed, deducts items from pantry memory, and displays the food used."""
+    args = context.args if context.args else []
+    meal_type = args[0].lower() if args else "lunch"
+    if meal_type not in ["breakfast", "lunch", "dinner", "snack"]:
+        meal_type = "lunch"
+    text, used = log_meal_consumption(meal_type)
+    keyboard = [
+        [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+        [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+    ]
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -640,6 +703,42 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await menu_command(update, context)
     elif data == "btn_week_plan":
         await week_command(update, context)
+    elif data == "btn_view_breakfast":
+        await breakfast_command(update, context)
+    elif data == "btn_view_lunch":
+        await lunch_command(update, context)
+    elif data == "btn_view_dinner":
+        await dinner_command(update, context)
+    elif data == "btn_view_snack":
+        await snack_command(update, context)
+    elif data == "btn_eat_breakfast":
+        text, _ = log_meal_consumption("breakfast")
+        keyboard = [
+            [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data == "btn_eat_lunch":
+        text, _ = log_meal_consumption("lunch")
+        keyboard = [
+            [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data == "btn_eat_dinner":
+        text, _ = log_meal_consumption("dinner")
+        keyboard = [
+            [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data == "btn_eat_snack":
+        text, _ = log_meal_consumption("snack")
+        keyboard = [
+            [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_swap_meal":
         plan = load_meal_plan()
         days = plan.get("days", [])
@@ -703,6 +802,11 @@ def main():
     app.add_handler(CommandHandler("today", menu_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("week", week_command))
+    app.add_handler(CommandHandler("breakfast", breakfast_command))
+    app.add_handler(CommandHandler("lunch", lunch_command))
+    app.add_handler(CommandHandler("dinner", dinner_command))
+    app.add_handler(CommandHandler("snack", snack_command))
+    app.add_handler(CommandHandler("eat", eat_command))
     app.add_handler(CommandHandler("preferences", preferences_command))
     app.add_handler(CommandHandler("pref", preferences_command))
     app.add_handler(CommandHandler("pantry", pantry_command))
