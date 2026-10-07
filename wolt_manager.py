@@ -136,6 +136,142 @@ def is_user_aborted(user_id=None) -> bool:
     ev = USER_ABORT_FLAGS.get(uid)
     return ev.is_set() if ev else False
 
+def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
+    """Parses a conversational user message into structured intent and parameters using Gemini 3.8 Flash or regex fallback."""
+    cfg = get_user_config(user_id) if user_id else {}
+    api_key = cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
+    
+    if api_key:
+        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
+            try:
+                from google import genai
+                client = genai.Client(api_key=api_key)
+                prompt = f"""
+You are the natural language understanding brain for the Wolt Smart Pantry Telegram Bot.
+Analyze this user message: "{user_text}"
+
+Classify into one of these intents:
+- "today_menu": Asking what is on the menu today, what to eat, breakfast, lunch, or dinner.
+- "recipe": Asking for a cooking recipe or culinary technique for a dish or ingredients.
+- "week_plan": Asking to browse the 7-day scheduled weekly meal plan.
+- "plan_week": Asking to generate a fresh 7-day meal plan or itemized grocery list.
+- "build_cart": Requesting to buy items or build a cart on Wolt.
+- "log_meal": Stating they ate a meal or specific food items (e.g. "I ate lunch", "ate 2 eggs").
+- "restock": Reporting groceries bought or adjusting inventory (e.g. "bought 10 eggs", "restock chicken").
+- "pantry_status": Checking what food/ingredients are in the fridge, pantry, or inventory.
+- "deals": Asking for discounts, sales, or store deals on Wolt.
+- "set_budget": Setting or changing the shopping budget ceiling.
+- "set_autopay": Turning 1-click auto-pay on or off.
+- "change_store": Changing store venue or city.
+- "preferences": Changing dietary preferences, allergies, or household size.
+- "wolt_status": Asking about Wolt browser login session.
+- "stop": Asking to stop, cancel, or abort an operation.
+- "chef_chat": General food, nutrition, culinary question, or greeting.
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+  "intent": "<intent_name>",
+  "parameters": {{
+    "dish_or_ingredients": "<string or null>",
+    "meal_type": "breakfast" | "lunch" | "dinner" | "snack" | null,
+    "items": [{{"name": "<string>", "qty": <int>}}],
+    "budget_amount": <float or null>,
+    "autopay_value": <true | false | null>,
+    "store_slug": "<string or null>",
+    "city": "<string or null>",
+    "allergies": ["<string>"],
+    "diet_type": "<string or null>",
+    "household_size": <int or null>,
+    "query": "<string or null>"
+  }},
+  "chef_reply": "<friendly concise 1-2 sentence response if chef_chat>"
+}}
+"""
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                txt = response.text if hasattr(response, "text") else str(response)
+                clean_txt = re.sub(r"^```(?:json)?\s*", "", txt.strip(), flags=re.MULTILINE)
+                clean_txt = re.sub(r"\s*```$", "", clean_txt.strip(), flags=re.MULTILINE)
+                return json.loads(clean_txt)
+            except Exception as e:
+                print(f"[!] NLU intent error with {model_name}: {e}")
+
+    # Fallback Regex / Keyword classification
+    low = user_text.lower().strip()
+    
+    # 1. Stop / Cancel
+    if any(w in low for w in ["stop", "abort", "cancel", "halt", "quit", "stopp"]):
+        return {"intent": "stop", "parameters": {}}
+        
+    # 2. Budget
+    if "budget" in low or "limit" in low or "ceiling" in low or "max price" in low:
+        m = re.findall(r'(\d+(?:[.,]\d+)?)', low)
+        if m:
+            b_val = float(m[0].replace(",", "."))
+            return {"intent": "set_budget", "parameters": {"budget_amount": b_val}}
+        return {"intent": "set_budget", "parameters": {}}
+        
+    # 3. Auto-pay
+    if "auto pay" in low or "autopay" in low or "1-click" in low or "safe review" in low:
+        val = False if any(w in low for w in ["off", "disable", "no", "stop", "false", "review"]) else True
+        return {"intent": "set_autopay", "parameters": {"autopay_value": val}}
+        
+    # 4. Recipe
+    if any(w in low for w in ["recipe", "how to cook", "how to make", "instructions for", "prepare", "receta"]):
+        return {"intent": "recipe", "parameters": {"dish_or_ingredients": user_text}}
+        
+    # 5. Today / Menu
+    if any(w in low for w in ["today", "menu", "lunch", "dinner", "breakfast", "snack", "what to eat", "what am i eating"]):
+        meal_type = "lunch"
+        if "breakfast" in low: meal_type = "breakfast"
+        elif "dinner" in low: meal_type = "dinner"
+        elif "snack" in low: meal_type = "snack"
+        return {"intent": "today_menu", "parameters": {"meal_type": meal_type}}
+        
+    # 6. Week Plan
+    if any(w in low for w in ["week", "schedule", "7 day", "calendar"]):
+        return {"intent": "week_plan", "parameters": {}}
+        
+    # 7. Generate Plan
+    if any(w in low for w in ["plan", "generate plan", "new plan", "shopping list", "groceries plan"]):
+        return {"intent": "plan_week", "parameters": {}}
+        
+    # 8. Build Cart
+    if any(w in low for w in ["buy", "order", "cart", "add to basket", "wolt cart", "assemble cart"]):
+        return {"intent": "build_cart", "parameters": {"query": user_text}}
+        
+    # 9. Eat / Log meal
+    if any(w in low for w in ["ate", "eaten", "consume", "finished eating", "had lunch", "had breakfast", "had dinner"]):
+        meal_type = "lunch"
+        if "breakfast" in low: meal_type = "breakfast"
+        elif "dinner" in low: meal_type = "dinner"
+        elif "snack" in low: meal_type = "snack"
+        return {"intent": "log_meal", "parameters": {"meal_type": meal_type}}
+        
+    # 10. Restock / Stock
+    if any(w in low for w in ["restock", "bought", "purchased", "got", "add stock"]):
+        return {"intent": "restock", "parameters": {"query": user_text}}
+        
+    # 11. Pantry / Fridge
+    if any(w in low for w in ["pantry", "fridge", "freezer", "stock", "what do i have", "inventory"]):
+        return {"intent": "pantry_status", "parameters": {}}
+        
+    # 12. Deals
+    if any(w in low for w in ["deal", "discount", "sale", "offer", "cheap", "promo"]):
+        return {"intent": "deals", "parameters": {}}
+        
+    # 13. Preferences / Allergies
+    if any(w in low for w in ["allergy", "allergic", "avoid", "dislike", "diet", "vegan", "vegetarian", "keto"]):
+        return {"intent": "preferences", "parameters": {"query": user_text}}
+        
+    return {
+        "intent": "chef_chat",
+        "parameters": {},
+        "chef_reply": "I'm your Wolt Smart Pantry Chef! I can plan your meals, manage your fridge inventory, check live store deals, and build your Wolt carts automatically. Tell me what you'd like to do!"
+    }
+
 def load_user_preferences(user_id=None):
     """Loads persistent user dietary preferences, allergies, and food avoidances."""
     target_file = get_user_preferences_file(user_id)

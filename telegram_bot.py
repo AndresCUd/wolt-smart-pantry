@@ -65,6 +65,7 @@ from wolt_manager import (
     get_candidate_grocery_list,
     set_user_abort,
     is_user_aborted,
+    parse_natural_language_intent,
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
@@ -98,10 +99,11 @@ except Exception:
     BOT_TIMEZONE = pytz.timezone("Europe/Tallinn")
 DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 
-# Temporary in-memory session cache for pending shopping proposals, photo meals, and active tasks per user
+# Temporary in-memory session cache for pending shopping proposals, photo meals, active tasks, and waiting prompt states
 user_pending_plans = {}
 user_pending_photo_meal = {}
 active_user_tasks = {}
+user_waiting_state = {}
 
 def get_user_store_and_city(user_id: int):
     """Retrieves the store venue, city, and country for a given user ID."""
@@ -238,8 +240,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals")
         ],
         [
-            InlineKeyboardButton("⚙️ Cart & Budget Settings", callback_data="btn_settings"),
-            InlineKeyboardButton("👤 Dietary & Allergies", callback_data="btn_pref")
+            InlineKeyboardButton("🛒 Custom Cart", callback_data="btn_prompt_cart"),
+            InlineKeyboardButton("👨‍🍳 Ask Recipe", callback_data="btn_prompt_recipe")
+        ],
+        [
+            InlineKeyboardButton("⚙️ Cart & Budget", callback_data="btn_settings"),
+            InlineKeyboardButton("👤 Dietary Profile", callback_data="btn_pref")
         ],
         [
             InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry"),
@@ -268,7 +274,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/wolt` - Check your user's isolated Wolt session status.\n"
         "• `/store <slug> [city]` - Set your preferred Wolt store venue.\n"
         "• `/setkey <api_key>` - Set your private Gemini API key.\n"
+        "• `/stop` - Abort active cart creation, scan, or proposal.\n"
         "• `/logs [lines]` - View live execution logs (default 25 lines).\n\n"
+        "💬 *Natural Language Supported!*\n"
+        "You can simply talk to the bot in plain English (e.g., _'What should I eat for lunch?'_, _'Buy 6 bananas and arugula on Wolt'_, _'Set budget to 50 euros'_, _'I ate 2 eggs for breakfast'_).\n\n"
         "🛡️ *Budget & Auto-Pay Protection:*\n"
         "If Auto-Pay is enabled, the bot checks your configured budget before placing the order. If the cart total exceeds your budget, **Auto-Pay is automatically blocked** and the cart is kept open for manual review in your phone app!"
     )
@@ -309,7 +318,11 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("💶 80 €", callback_data="btn_set_budget_80")
         ],
         [
-            InlineKeyboardButton("🚫 No Budget Limit", callback_data="btn_set_budget_0"),
+            InlineKeyboardButton("✏️ Custom Budget", callback_data="btn_prompt_budget"),
+            InlineKeyboardButton("🚫 No Budget Limit", callback_data="btn_set_budget_0")
+        ],
+        [
+            InlineKeyboardButton("🏬 Change Store", callback_data="btn_prompt_store"),
             InlineKeyboardButton("🛍️ Wolt Session", callback_data="btn_wolt_status")
         ],
         [
@@ -687,8 +700,18 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         "• `/pref reset`"
     )
     keyboard = [
-        [InlineKeyboardButton("📋 Generate Plan with Profile", callback_data="btn_plan")],
-        [InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref")]
+        [
+            InlineKeyboardButton("🥜 Set Allergies", callback_data="btn_prompt_allergy"),
+            InlineKeyboardButton("🚫 Avoided Foods", callback_data="btn_prompt_avoid")
+        ],
+        [
+            InlineKeyboardButton("👥 Household Size", callback_data="btn_prompt_household"),
+            InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref")
+        ],
+        [
+            InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan"),
+            InlineKeyboardButton("🏠 Pantry Status", callback_data="btn_pantry")
+        ]
     ]
     await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -1480,6 +1503,481 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await query_edit_safe(query, "❌ Meal photo discarded.")
     elif data == "btn_cancel_plan":
         await query_edit_safe(query, "❌ Meal plan cancelled.")
+    elif data == "btn_prompt_budget":
+        user_waiting_state[user_id] = {"action": "set_budget"}
+        await query.message.reply_text(
+            "💶 *Set Custom Cart Budget*\n\n"
+            "Please reply with your maximum cart budget in Euros (e.g. `45` or `0` for no limit) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_store":
+        user_waiting_state[user_id] = {"action": "set_store"}
+        await query.message.reply_text(
+            "🏬 *Change Store Venue*\n\n"
+            "Please reply with the Wolt store venue slug and optional city (e.g. `wolt-market-maakri tallinn`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_cart":
+        user_waiting_state[user_id] = {"action": "set_cart"}
+        await query.message.reply_text(
+            "🛒 *Build Custom Wolt Cart*\n\n"
+            "Please reply with the items and quantities you want (e.g. `Banaan:6 Rukola:1 Munad:1`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_recipe":
+        user_waiting_state[user_id] = {"action": "get_recipe"}
+        await query.message.reply_text(
+            "👨‍🍳 *Ask Chef AI for a Recipe*\n\n"
+            "What dish, meal, or ingredients would you like a gourmet recipe for? (e.g. `salmon with asparagus` or `lunch`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_allergy":
+        user_waiting_state[user_id] = {"action": "set_allergy"}
+        await query.message.reply_text(
+            "🥜 *Update Allergy Profile*\n\n"
+            "Please reply with your allergies separated by commas (e.g. `peanuts, shellfish, lactose`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_avoid":
+        user_waiting_state[user_id] = {"action": "set_avoid"}
+        await query.message.reply_text(
+            "🚫 *Update Avoided Foods / Dislikes*\n\n"
+            "Please reply with ingredients you dislike or avoid separated by commas (e.g. `pork, mushrooms, eggplant`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_household":
+        user_waiting_state[user_id] = {"action": "set_household"}
+        await query.message.reply_text(
+            "👥 *Set Household Size*\n\n"
+            "Please reply with the number of people to feed (e.g. `2`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+    elif data == "btn_prompt_stock":
+        user_waiting_state[user_id] = {"action": "set_stock"}
+        await query.message.reply_text(
+            "📦 *Adjust Stock Level*\n\n"
+            "Please reply with the item name and count (e.g. `eggs 10` or `chicken 2`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
+
+@auth_guard
+async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Processes plain text messages: resolves active prompt waiting states or parses natural language intents."""
+    if not update.message or not update.message.text:
+        return
+    user_text = update.message.text.strip()
+    user_id = update.effective_user.id if update.effective_user else 0
+
+    # 0. Global Cancellation
+    if user_text.lower() in ["/cancel", "cancel", "/abort", "abort", "/stop", "stop"]:
+        if user_id in user_waiting_state:
+            user_waiting_state.pop(user_id, None)
+            await reply_safe(update, context, "🚫 Action cancelled. How else can I help you?")
+            return
+        await stop_command(update, context)
+        return
+
+    # 1. Handle Active Prompt Waiting State
+    if user_id in user_waiting_state:
+        state = user_waiting_state.pop(user_id)
+        action = state.get("action")
+        
+        if action == "set_budget":
+            val_str = user_text.replace(",", ".").replace("€", "").strip()
+            try:
+                val = float(val_str)
+                cfg = get_user_config(user_id)
+                if val <= 0:
+                    cfg["max_budget"] = None
+                    save_user_config(cfg, user_id=user_id)
+                    await reply_safe(update, context, "✅ *Cart Budget Limit Removed.* No price ceiling is enforced.")
+                else:
+                    cfg["max_budget"] = val
+                    save_user_config(cfg, user_id=user_id)
+                    await reply_safe(update, context, f"✅ *Cart Budget Limit Set:* **{val:.2f} €**\nIf any grocery order exceeds this total, Auto-Pay will be automatically blocked for your safety.")
+            except ValueError:
+                await reply_safe(update, context, "⚠️ Invalid amount. Budget not updated. You can try again or use `/budget <amount>`.")
+            return
+
+        elif action == "set_store":
+            parts = user_text.split()
+            if parts:
+                new_store = parts[0].strip()
+                new_city = parts[1].strip().lower() if len(parts) > 1 else DEFAULT_CITY
+                cfg = get_user_config(user_id)
+                cfg["store"] = new_store
+                cfg["city"] = new_city
+                save_user_config(cfg, user_id=user_id)
+                await reply_safe(update, context, f"✅ *Store Venue Updated:*\n• Store: `{new_store}`\n• City: `{new_city}`\n\nAll subsequent scans and cart operations will use this store.")
+            else:
+                await reply_safe(update, context, "⚠️ No store specified. Try again with `/store <venue-slug>`.")
+            return
+
+        elif action == "set_cart":
+            parts = user_text.split()
+            items = []
+            for it in parts:
+                if ":" in it:
+                    p = it.rsplit(":", 1)
+                    name = p[0].strip()
+                    qty = int(p[1].strip()) if p[1].strip().isdigit() else 1
+                    items.append((name, qty))
+                else:
+                    items.append((it.strip(), 1))
+            
+            if not items:
+                await reply_safe(update, context, "⚠️ No items found. Usage example: `Banaan:6 Rukola:1`")
+                return
+            
+            store, city, country = get_user_store_and_city(user_id)
+            cfg = get_user_config(user_id)
+            auto_pay_pref = cfg.get("auto_pay", False)
+            budget_limit = cfg.get("max_budget")
+            msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
+            
+            try:
+                res = await asyncio.to_thread(
+                    add_items_to_cart,
+                    store,
+                    items,
+                    city=city,
+                    country=country,
+                    keep_open=True,
+                    record_memory=False,
+                    auto_pay=auto_pay_pref,
+                    user_id=user_id,
+                    budget=budget_limit
+                )
+                wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+                final_p = res.get("final_price", 0.0)
+                budget_exceeded = res.get("budget_exceeded", False)
+                paid_ok = res.get("auto_pay_success", False)
+
+                keyboard = [
+                    [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+                    [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
+                ]
+                user_pending_plans[user_id] = items
+
+                if budget_exceeded:
+                    resp_text = (
+                        "🚨 *Budget Safety Alert!*\n\n"
+                        f"💶 *Cart Total:* **{final_p:.2f} €**\n"
+                        f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
+                        "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
+                        "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
+                    )
+                elif paid_ok:
+                    resp_text = (
+                        "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
+                        f"💶 *Total Paid:* **{final_p:.2f} €**\n"
+                        "📦 Items recorded into your pantry memory for next week."
+                    )
+                else:
+                    resp_text = (
+                        "🎉 *Cart Ready & Synchronized!*\n\n"
+                        f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
+                        "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
+                        "👇 Once placed, tap below to sync your virtual pantry memory:"
+                    )
+                if msg:
+                    await edit_safe(msg, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+                else:
+                    await reply_safe(update, context, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            except Exception as e:
+                logger.error(f"Cart build failed: {e}", exc_info=True)
+                if msg:
+                    await edit_safe(msg, f"⚠️ Cart build failed: {e}")
+                else:
+                    await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+            return
+
+        elif action == "get_recipe":
+            dish_name = user_text
+            ingredients = [dish_name]
+            msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a step-by-step gourmet recipe for:* `{dish_name}`...")
+            recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients, None, None, user_id)
+            keyboard = [
+                [
+                    InlineKeyboardButton("🍳 Breakfast Recipe", callback_data="btn_recipe_breakfast"),
+                    InlineKeyboardButton("🥗 Lunch Recipe", callback_data="btn_recipe_lunch"),
+                    InlineKeyboardButton("🍲 Dinner Recipe", callback_data="btn_recipe_dinner")
+                ],
+                [
+                    InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu"),
+                    InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
+                ]
+            ]
+            if msg:
+                await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await reply_safe(update, context, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        elif action == "set_allergy":
+            prefs = load_user_preferences(user_id=user_id)
+            new_allergies = [a.strip() for a in user_text.split(",") if a.strip()]
+            prefs["allergies"] = new_allergies
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Allergies Updated:* {', '.join(new_allergies) if new_allergies else 'None'}")
+            return
+
+        elif action == "set_avoid":
+            prefs = load_user_preferences(user_id=user_id)
+            new_avoid = [a.strip() for a in user_text.split(",") if a.strip()]
+            prefs["avoided_ingredients"] = new_avoid
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Avoided Foods Updated:* {', '.join(new_avoid) if new_avoid else 'None'}")
+            return
+
+        elif action == "set_household":
+            if user_text.strip().isdigit():
+                prefs = load_user_preferences(user_id=user_id)
+                prefs["household_size"] = max(1, int(user_text.strip()))
+                save_user_preferences(prefs, user_id=user_id)
+                await reply_safe(update, context, f"✅ *Household Size Set To:* {prefs['household_size']} person(s)")
+            else:
+                await reply_safe(update, context, "⚠️ Please provide a valid integer for household size (e.g. `2`).")
+            return
+
+        elif action == "set_stock":
+            parts = user_text.split()
+            if parts:
+                item_name = parts[0].lower()
+                qty_val = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
+                pantry = load_pantry_memory(user_id=user_id)
+                matched = False
+                for p in pantry.get("proteins", []):
+                    if item_name in p.get("name", "").lower():
+                        p["qty"] = qty_val
+                        matched = True
+                        break
+                if not matched:
+                    for pr in pantry.get("produce", []):
+                        if item_name in pr.get("name", "").lower():
+                            pr["qty"] = qty_val
+                            matched = True
+                            break
+                if not matched:
+                    for s in pantry.get("staples", []):
+                        if item_name in s.get("name", "").lower():
+                            s["qty"] = qty_val
+                            matched = True
+                            break
+                if not matched:
+                    pantry.setdefault("proteins", []).append({
+                        "name": item_name.capitalize(),
+                        "qty": qty_val,
+                        "category": "manual_stock"
+                    })
+                save_pantry_memory(pantry, user_id=user_id)
+                await reply_safe(update, context, f"✅ *Stock Updated:* `{item_name.capitalize()}` is now set to **{qty_val}** in your pantry memory.")
+            return
+
+    # 2. Natural Language Understanding via Gemini / Fallback
+    nlu_result = await asyncio.to_thread(parse_natural_language_intent, user_text, user_id)
+    intent = nlu_result.get("intent", "chef_chat")
+    params = nlu_result.get("parameters", {})
+    
+    logger.info(f"NLU result for user {user_id}: intent='{intent}', params={params}")
+
+    if intent == "stop":
+        await stop_command(update, context)
+    elif intent == "today_menu":
+        meal_type = params.get("meal_type")
+        if meal_type == "breakfast":
+            await breakfast_command(update, context)
+        elif meal_type == "lunch":
+            await lunch_command(update, context)
+        elif meal_type == "dinner":
+            await dinner_command(update, context)
+        elif meal_type == "snack":
+            await snack_command(update, context)
+        else:
+            await menu_command(update, context)
+    elif intent == "week_plan":
+        await week_command(update, context)
+    elif intent == "plan_week":
+        await plan_command(update, context)
+    elif intent == "deals":
+        await deals_command(update, context)
+    elif intent == "pantry_status":
+        await pantry_command(update, context)
+    elif intent == "wolt_status":
+        await wolt_command(update, context)
+    elif intent == "log_meal":
+        meal_t = params.get("meal_type") or "lunch"
+        text, _ = log_meal_consumption(meal_t, user_id=user_id)
+        keyboard = [
+            [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif intent == "set_budget":
+        b_val = params.get("budget_amount")
+        if b_val is not None:
+            cfg = get_user_config(user_id)
+            if b_val <= 0:
+                cfg["max_budget"] = None
+                save_user_config(cfg, user_id=user_id)
+                await reply_safe(update, context, "✅ *Cart Budget Limit Removed.* No price ceiling is enforced.")
+            else:
+                cfg["max_budget"] = b_val
+                save_user_config(cfg, user_id=user_id)
+                await reply_safe(update, context, f"✅ *Cart Budget Limit Set:* **{b_val:.2f} €**\nIf any grocery order exceeds this total, Auto-Pay will be automatically blocked for your safety.")
+        else:
+            await budget_command(update, context)
+    elif intent == "set_autopay":
+        val = params.get("autopay_value")
+        if val is not None:
+            cfg = get_user_config(user_id)
+            cfg["auto_pay"] = val
+            save_user_config(cfg, user_id=user_id)
+            if val:
+                await reply_safe(update, context, "⚡ *Auto-Pay ENABLED!* Building carts will automatically submit payment on Wolt (subject to your budget limit).")
+            else:
+                await reply_safe(update, context, "🛡️ *Auto-Pay DISABLED!* Safe Review mode is active. Carts will be built and synced to your phone app without charging your card.")
+        else:
+            await autopay_command(update, context)
+    elif intent == "change_store":
+        st = params.get("store_slug")
+        ct = params.get("city") or DEFAULT_CITY
+        if st:
+            cfg = get_user_config(user_id)
+            cfg["store"] = st
+            cfg["city"] = ct
+            save_user_config(cfg, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Store Venue Updated:*\n• Store: `{st}`\n• City: `{ct}`")
+        else:
+            await store_command(update, context)
+    elif intent == "preferences":
+        if params.get("allergies"):
+            prefs = load_user_preferences(user_id=user_id)
+            prefs["allergies"] = params["allergies"]
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Allergies Updated:* {', '.join(params['allergies'])}")
+        elif params.get("diet_type"):
+            prefs = load_user_preferences(user_id=user_id)
+            prefs["diet_type"] = params["diet_type"].lower()
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Diet Type Set To:* {params['diet_type'].capitalize()}")
+        elif params.get("household_size"):
+            prefs = load_user_preferences(user_id=user_id)
+            prefs["household_size"] = max(1, int(params["household_size"]))
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Household Size Set To:* {prefs['household_size']} person(s)")
+        else:
+            await preferences_command(update, context)
+    elif intent == "recipe":
+        dish_name = params.get("dish_or_ingredients") or user_text
+        msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a step-by-step recipe for:* `{dish_name}`...")
+        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, [dish_name], None, None, user_id)
+        keyboard = [
+            [
+                InlineKeyboardButton("🍳 Breakfast Recipe", callback_data="btn_recipe_breakfast"),
+                InlineKeyboardButton("🥗 Lunch Recipe", callback_data="btn_recipe_lunch"),
+                InlineKeyboardButton("🍲 Dinner Recipe", callback_data="btn_recipe_dinner")
+            ],
+            [
+                InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu"),
+                InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
+            ]
+        ]
+        if msg:
+            await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await reply_safe(update, context, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
+    elif intent == "restock":
+        items_extracted = params.get("items", [])
+        if items_extracted:
+            restock_text, _ = restock_pantry_from_detected_items(items_extracted, source="nl_restock", user_id=user_id)
+            keyboard = [
+                [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
+                [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
+            ]
+            await reply_safe(update, context, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await setstock_command(update, context)
+    elif intent == "build_cart":
+        items_extracted = params.get("items", [])
+        if items_extracted:
+            items_tuples = [(it["name"], it.get("qty", 1)) for it in items_extracted]
+            user_pending_plans[user_id] = items_tuples
+            store, city, country = get_user_store_and_city(user_id)
+            cfg = get_user_config(user_id)
+            auto_pay_pref = cfg.get("auto_pay", False)
+            budget_limit = cfg.get("max_budget")
+            msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items_tuples)} items on {store}...")
+            try:
+                res = await asyncio.to_thread(
+                    add_items_to_cart,
+                    store,
+                    items_tuples,
+                    city=city,
+                    country=country,
+                    keep_open=True,
+                    record_memory=False,
+                    auto_pay=auto_pay_pref,
+                    user_id=user_id,
+                    budget=budget_limit
+                )
+                wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+                final_p = res.get("final_price", 0.0)
+                budget_exceeded = res.get("budget_exceeded", False)
+                paid_ok = res.get("auto_pay_success", False)
+
+                keyboard = [
+                    [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+                    [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
+                ]
+                if budget_exceeded:
+                    resp_text = (
+                        "🚨 *Budget Safety Alert!*\n\n"
+                        f"💶 *Cart Total:* **{final_p:.2f} €**\n"
+                        f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
+                        "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
+                        "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
+                    )
+                elif paid_ok:
+                    resp_text = (
+                        "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
+                        f"💶 *Total Paid:* **{final_p:.2f} €**\n"
+                        "📦 Items recorded into your pantry memory for next week."
+                    )
+                else:
+                    resp_text = (
+                        "🎉 *Cart Ready & Synchronized!*\n\n"
+                        f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
+                        "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
+                        "👇 Once placed, tap below to sync your virtual pantry memory:"
+                    )
+                if msg:
+                    await edit_safe(msg, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+                else:
+                    await reply_safe(update, context, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            except Exception as e:
+                logger.error(f"Cart build failed: {e}", exc_info=True)
+                if msg:
+                    await edit_safe(msg, f"⚠️ Cart build failed: {e}")
+                else:
+                    await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+        else:
+            user_waiting_state[user_id] = {"action": "set_cart"}
+            await reply_safe(update, context, "🛒 *What items would you like to add to your Wolt cart?*\n\nSend items with quantities (e.g. `Banaan:6 Rukola:1 Sibul:1`) or `/cancel` to abort:")
+    else:
+        # chef_chat fallback
+        chef_reply = nlu_result.get("chef_reply") or "👨‍🍳 I'm here to help with your meals, pantry, store deals, and Wolt carts! What would you like to cook or plan today?"
+        keyboard = [
+            [
+                InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu"),
+                InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan")
+            ],
+            [
+                InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals"),
+                InlineKeyboardButton("📦 Pantry Status", callback_data="btn_pantry")
+            ]
+        ]
+        await reply_safe(update, context, f"👨‍🍳 {chef_reply}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Logs uncaught exceptions and sends a helpful message to the user."""
@@ -1586,6 +2084,7 @@ def main():
     app.add_handler(CommandHandler("store", store_command))
     app.add_handler(CommandHandler("logs", logs_command))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     app.add_handler(CallbackQueryHandler(button_callback_handler))
 
     # Global error handler
