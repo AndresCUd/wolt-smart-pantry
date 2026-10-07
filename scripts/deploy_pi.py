@@ -17,7 +17,7 @@ def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER, allocate_tty=True):
     target = f"{user}@{host}"
     ssh_cmd = ["ssh", "-o", "ConnectTimeout=15"]
     if allocate_tty:
-        ssh_cmd.append("-t")
+        ssh_cmd.append("-tt")
     ssh_cmd.extend([target, cmd])
     print(f"[*] Executing on {target}: {cmd}")
     res = subprocess.run(ssh_cmd)
@@ -38,6 +38,14 @@ def copy_ssh_key(host=DEFAULT_HOST, user=DEFAULT_USER):
     print(f"[*] Installing public key ({pubkey_path}) onto {target}...")
     remote_script = f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '{pubkey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
     return run_ssh(remote_script, host=host, user=user)
+
+def setup_sudo(host=DEFAULT_HOST, user=DEFAULT_USER):
+    """Configures passwordless sudo for wolt-bot service management on the Raspberry Pi."""
+    target = f"{user}@{host}"
+    print(f"[*] Configuring passwordless sudo for '{SERVICE_NAME}' service on {target}...")
+    rule = f"{user} ALL=(ALL) NOPASSWD: /bin/systemctl restart {SERVICE_NAME}, /bin/systemctl is-active {SERVICE_NAME}, /bin/systemctl status {SERVICE_NAME}, /bin/systemctl start {SERVICE_NAME}, /bin/systemctl stop {SERVICE_NAME}, /usr/bin/systemctl restart {SERVICE_NAME}, /usr/bin/systemctl is-active {SERVICE_NAME}, /usr/bin/systemctl status {SERVICE_NAME}"
+    cmd = f"echo '{rule}' | sudo tee /etc/sudoers.d/{SERVICE_NAME} && sudo chmod 440 /etc/sudoers.d/{SERVICE_NAME}"
+    return run_ssh(cmd, host=host, user=user)
 
 def deploy(host=DEFAULT_HOST, user=DEFAULT_USER, remote_dir=REMOTE_DIR):
     target = f"{user}@{host}"
@@ -61,7 +69,7 @@ def logs(host=DEFAULT_HOST, user=DEFAULT_USER, lines=30):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Raspberry Pi Deployment & SSH Manager")
-    parser.add_argument("action", choices=["deploy", "status", "logs", "setup-key", "exec"], default="deploy", nargs="?", help="Action to perform")
+    parser.add_argument("action", choices=["deploy", "status", "logs", "setup-key", "setup-sudo", "exec"], default="deploy", nargs="?", help="Action to perform")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"Raspberry Pi IP / Hostname (default: {DEFAULT_HOST})")
     parser.add_argument("--user", default=DEFAULT_USER, help=f"Raspberry Pi SSH User (default: {DEFAULT_USER})")
     parser.add_argument("--dir", default=REMOTE_DIR, help=f"Remote repository path (default: {REMOTE_DIR})")
@@ -72,6 +80,8 @@ if __name__ == "__main__":
 
     if args.action == "setup-key":
         sys.exit(copy_ssh_key(host=args.host, user=args.user))
+    elif args.action == "setup-sudo":
+        sys.exit(setup_sudo(host=args.host, user=args.user))
     elif args.action == "deploy":
         sys.exit(deploy(host=args.host, user=args.user, remote_dir=args.dir))
     elif args.action == "status":
