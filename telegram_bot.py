@@ -1,7 +1,8 @@
 """
 Wolt Smart Pantry - Telegram Bot Bridge
 Control your pantry memory, live store discovery, meal planning, and automated Wolt cart creation from your phone.
-Supports multiple users with isolated pantry memory, weekly plans, and separate persistent Wolt browser sessions.
+Supports multiple users with isolated pantry memory, weekly plans, separate persistent Wolt browser sessions,
+and user-configurable cart checkout flows (1-click Auto-Pay vs Safe Review with strict Budget Limits).
 """
 
 import os
@@ -197,23 +198,31 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id if user else 0
     store, city, _ = get_user_store_and_city(user_id)
+    cfg = get_user_config(user_id)
+    auto_pay_active = cfg.get("auto_pay", False)
+    budget_limit = cfg.get("max_budget")
+    budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit (∞)"
+    
     welcome_text = (
         f"👋 Hello {user.first_name if user else 'there'}!\n\n"
         "🛒 *Wolt Smart Pantry Bot* is online.\n"
-        f"👤 *Your Profile ID:* `{user_id}`\n"
-        f"🏬 *Venue:* `{store}` ({city.capitalize()})\n\n"
+        f"👤 *Profile ID:* `{user_id}`\n"
+        f"🏬 *Venue:* `{store}` ({city.capitalize()})\n"
+        f"💳 *Checkout Flow:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review & Sync'}`\n"
+        f"💶 *Cart Budget:* `{budget_txt}`\n\n"
         "Here is what you can do:\n"
-        "• 🌅 `/today` (or `/menu`) - Check today's meals, portions & chef tips\n"
-        "• 📅 `/week` - Browse the full 7-day scheduled meal plan\n"
-        "• 📸 *Send a photo* of a meal plate or groceries with `/stock`\n"
-        "• `/plan` - Generate zero-waste 7-day meal plan & shopping list\n"
+        "• 🌅 `/today` (or `/menu`) - Today's meals, portions & chef tips\n"
+        "• 📅 `/week` - Browse the 7-day scheduled meal plan\n"
+        "• 📸 *Send a photo* of meals or groceries with `/stock`\n"
+        "• `/plan` - Generate meal plan & assemble Wolt cart\n"
+        "• `/settings` (or `/cartflow`) - Configure Auto-Pay & Budget Limits\n"
+        "• `/budget <amount>` - Set max cart budget (e.g. `/budget 50`)\n"
         "• `/pref` - Configure allergies, avoided foods & diet type\n"
-        "• `/pantry` - View virtual pantry memory & long-term staples\n"
-        "• `/deals` - Explore live discounts in your Wolt store\n"
-        "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6 Rukola:1`)\n"
-        "• `/wolt` - Inspect your dedicated Wolt browser session\n"
-        "• `/logs` - View recent system and automation logs\n"
-        "• `/help` - View full usage guide & safety options\n\n"
+        "• `/pantry` - View virtual pantry memory & staples\n"
+        "• `/deals` - Explore live discounts on Wolt\n"
+        "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6`)\n"
+        "• `/wolt` - Inspect your isolated Wolt browser session\n"
+        "• `/help` - View complete command guide\n\n"
         f"⏰ *Morning Schedule:* Daily menu arrives automatically at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone})."
     )
     keyboard = [
@@ -226,11 +235,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals")
         ],
         [
-            InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry"),
+            InlineKeyboardButton("⚙️ Cart & Budget Settings", callback_data="btn_settings"),
             InlineKeyboardButton("👤 Dietary & Allergies", callback_data="btn_pref")
         ],
         [
-            InlineKeyboardButton("🛒 Build Sample Cart", callback_data="btn_sample_cart"),
+            InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry"),
             InlineKeyboardButton("🛍️ Wolt Session", callback_data="btn_wolt_status")
         ]
     ]
@@ -242,9 +251,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Detailed command reference."""
     help_text = (
         "📖 *Command Guide:*\n\n"
-        "• `/today` (or `/menu`) - Today's breakfast/lunch/dinner, raw-to-cooked portions & freshness reminders.\n"
-        "• `/week` - 7-day full weekly meal schedule (Monday to Sunday).\n"
-        "• `/plan` - Audits your pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan.\n"
+        "• `/today` (or `/menu`) - Today's scheduled meals, raw-to-cooked portions & freshness reminders.\n"
+        "• `/week` - 7-day full weekly meal schedule.\n"
+        "• `/plan` - Audits pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan.\n"
+        "• `/settings` (or `/cartflow`) - Configure Auto-Pay flow, budget limits & store venues.\n"
+        "• `/budget <amount>` - Set maximum cart budget (e.g. `/budget 50` or `/budget 0` to disable).\n"
+        "• `/autopay [on|off]` - Toggle automated payment submission.\n"
         "• `/pref` - Manage your allergies, disliked ingredients, and household size.\n"
         "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent stock.\n"
         "• `/stock` - Restock items manually (`/stock eggs 10`) or upload a photo with caption `/stock`.\n"
@@ -253,13 +265,117 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/wolt` - Check your user's isolated Wolt session status.\n"
         "• `/store <slug> [city]` - Set your preferred Wolt store venue.\n"
         "• `/setkey <api_key>` - Set your private Gemini API key.\n"
-        "• `/logs [lines]` - View live execution logs (default 25 lines).\n"
-        "• `/clear_pantry` - Resets your virtual pantry memory.\n\n"
-        f"⏰ *Automatic Morning Broadcast:* Every morning at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone}), your daily menu is delivered here automatically.\n\n"
-        "🛡️ *Multi-User Safety:*\n"
-        "Each user has their own isolated storage (`data/users/<id>/`), persistent pantry memory, and separate Wolt browser profile."
+        "• `/logs [lines]` - View live execution logs (default 25 lines).\n\n"
+        "🛡️ *Budget & Auto-Pay Protection:*\n"
+        "If Auto-Pay is enabled, the bot checks your configured budget before placing the order. If the cart total exceeds your budget, **Auto-Pay is automatically blocked** and the cart is kept open for manual review in your phone app!"
     )
     await reply_safe(update, context, help_text)
+
+@auth_guard
+async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Interactive settings panel for Cart Flow, Auto-Pay, Budget Limits, and Store Configuration."""
+    user_id = update.effective_user.id if update.effective_user else 0
+    cfg = get_user_config(user_id)
+    store, city, country = get_user_store_and_city(user_id)
+    prefs = load_user_preferences(user_id=user_id)
+    
+    auto_pay_active = cfg.get("auto_pay", False)
+    budget_limit = cfg.get("max_budget")
+    budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit (∞)"
+    
+    status_text = (
+        "⚙️ *Cart Flow & Budget Configuration:*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 *User Profile ID:* `{user_id}`\n\n"
+        f"💳 *Checkout Mode:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review (Sync to Wolt App)'}`\n"
+        f"💶 *Max Cart Budget:* `{budget_txt}`\n"
+        f"🏬 *Store Venue:* `{store}` ({city.capitalize()}, {country.upper()})\n"
+        f"👥 *Household:* `{prefs.get('household_size', 1)} person(s)` | *Diet:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n\n"
+        "🛡️ *Safety Rule:* If Auto-Pay is ON and the cart total exceeds your budget, automated payment is instantly blocked and sent to your phone for safe manual review.\n\n"
+        "👇 *Tap a button below to configure your preferences:*"
+    )
+    
+    autopay_btn_txt = "🔴 Turn Auto-Pay OFF (Safe Review)" if auto_pay_active else "🟢 Turn Auto-Pay ON (1-Click)"
+    
+    keyboard = [
+        [InlineKeyboardButton(autopay_btn_txt, callback_data="btn_toggle_autopay")],
+        [
+            InlineKeyboardButton("💶 40 €", callback_data="btn_set_budget_40"),
+            InlineKeyboardButton("💶 50 €", callback_data="btn_set_budget_50"),
+            InlineKeyboardButton("💶 65 €", callback_data="btn_set_budget_65"),
+            InlineKeyboardButton("💶 80 €", callback_data="btn_set_budget_80")
+        ],
+        [
+            InlineKeyboardButton("🚫 No Budget Limit", callback_data="btn_set_budget_0"),
+            InlineKeyboardButton("🛍️ Wolt Session", callback_data="btn_wolt_status")
+        ],
+        [
+            InlineKeyboardButton("👤 Dietary Profile", callback_data="btn_pref"),
+            InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await reply_safe(update, context, status_text, reply_markup=reply_markup)
+
+@auth_guard
+async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets user max cart budget limit: /budget <amount> or /budget 0 to disable"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args if context.args else []
+    cfg = get_user_config(user_id)
+    
+    if not args:
+        curr_b = cfg.get("max_budget")
+        b_txt = f"{curr_b:.2f} €" if curr_b else "No Limit (∞)"
+        msg = (
+            f"💶 *Current Cart Budget Limit:* `{b_txt}`\n\n"
+            "💡 *How to update:*\n"
+            "• `/budget 50` (sets budget to 50.00 €)\n"
+            "• `/budget 65.50`\n"
+            "• `/budget 0` (removes budget limit)\n"
+            "• Or use `/settings` for 1-tap buttons."
+        )
+        await reply_safe(update, context, msg)
+        return
+        
+    val_str = args[0].replace(",", ".").replace("€", "").strip()
+    try:
+        val = float(val_str)
+        if val <= 0:
+            cfg["max_budget"] = None
+            save_user_config(cfg, user_id=user_id)
+            await reply_safe(update, context, "✅ *Cart Budget Limit Removed.* There is now no price ceiling before payment.")
+        else:
+            cfg["max_budget"] = val
+            save_user_config(cfg, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Cart Budget Limit Set:* **{val:.2f} €**\nIf any grocery order exceeds this total, Auto-Pay will be automatically blocked for your safety.")
+    except ValueError:
+        await reply_safe(update, context, "⚠️ Invalid amount. Usage: `/budget 50` or `/budget 0` to disable.")
+
+@auth_guard
+async def autopay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enables or disables auto-pay mode: /autopay [on|off]"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args if context.args else []
+    cfg = get_user_config(user_id)
+    
+    if not args:
+        curr = cfg.get("auto_pay", False)
+        status_txt = "🟢 ENABLED (1-Click Auto-Pay)" if curr else "🛡️ DISABLED (Safe Review Mode)"
+        await reply_safe(update, context, f"💳 *Auto-Pay Status:* `{status_txt}`\n\nTo change: `/autopay on` or `/autopay off`")
+        return
+        
+    arg = args[0].lower()
+    if arg in ["on", "true", "enable", "yes", "1"]:
+        cfg["auto_pay"] = True
+        save_user_config(cfg, user_id=user_id)
+        await reply_safe(update, context, "⚡ *Auto-Pay ENABLED!* Building carts will automatically submit payment on Wolt (subject to your budget limit).")
+    elif arg in ["off", "false", "disable", "no", "0"]:
+        cfg["auto_pay"] = False
+        save_user_config(cfg, user_id=user_id)
+        await reply_safe(update, context, "🛡️ *Auto-Pay DISABLED!* Safe Review mode is active. Carts will be built and synced to your phone app without charging your card.")
+    else:
+        await reply_safe(update, context, "Usage: `/autopay on` or `/autopay off`")
 
 @auth_guard
 async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -632,8 +748,12 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await reply_safe(update, context, "📐 Calculating 7-day meal plan based on your dietary profile, allergies & Wolt catalog...")
     
     prefs = load_user_preferences(user_id=user_id)
+    cfg = get_user_config(user_id)
     household_multiplier = prefs.get("household_size", 1)
     diet = prefs.get("diet_type", "omnivore").lower()
+    auto_pay_active = cfg.get("auto_pay", False)
+    budget_limit = cfg.get("max_budget")
+    budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit"
 
     # Candidate shopping list tailored by diet, allergies, household size, and breakfast
     filtered_items = get_candidate_grocery_list(prefs, user_id=user_id)
@@ -654,14 +774,18 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for it_name, it_qty in filtered_items:
         plan_text += f"• `{it_name}` × {it_qty}\n"
 
-    plan_text += "\n✋ *Checkpoint 1:* Would you like to build this cart on Wolt?"
+    plan_text += f"\n⚙️ *Configured Flow:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review'}` (Budget: `{budget_txt}`)\n"
+    plan_text += "👇 *Ready to build this cart on Wolt?*"
 
     keyboard = [
         [
-            InlineKeyboardButton("🛒 Build Cart on Wolt (Safe Review)", callback_data="btn_confirm_cart"),
+            InlineKeyboardButton("🛒 Build Cart on Wolt", callback_data="btn_confirm_cart"),
         ],
         [
-            InlineKeyboardButton("💳 Auto Pay & Order (1-Click)", callback_data="btn_confirm_autopay"),
+            InlineKeyboardButton("⚡ Auto Pay & Order", callback_data="btn_confirm_autopay"),
+            InlineKeyboardButton("⚙️ Settings", callback_data="btn_settings")
+        ],
+        [
             InlineKeyboardButton("❌ Cancel", callback_data="btn_cancel_plan")
         ]
     ]
@@ -675,6 +799,10 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Direct cart assembly command: /cart Item:Qty Item:Qty"""
     user_id = update.effective_user.id if update.effective_user else 0
     store, city, country = get_user_store_and_city(user_id)
+    cfg = get_user_config(user_id)
+    auto_pay_pref = cfg.get("auto_pay", False)
+    budget_limit = cfg.get("max_budget")
+    
     args = context.args if context.args else []
     if not args:
         await reply_safe(update, context, "Usage: `/cart Banaan:6 Rukola:1 Sibul:1`")
@@ -693,7 +821,7 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
     
     try:
-        await asyncio.to_thread(
+        res = await asyncio.to_thread(
             add_items_to_cart,
             store,
             items,
@@ -701,24 +829,46 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             country=country,
             keep_open=True,
             record_memory=False,
-            auto_pay=False,
-            user_id=user_id
+            auto_pay=auto_pay_pref,
+            user_id=user_id,
+            budget=budget_limit
         )
         wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+        final_p = res.get("final_price", 0.0)
+        budget_exceeded = res.get("budget_exceeded", False)
+        paid_ok = res.get("auto_pay_success", False)
+
         keyboard = [
             [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
             [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
         ]
         user_pending_plans[user_id] = items
-        success_text = (
-            "🎉 *Cart Ready & Synchronized!*\n\n"
-            "📲 *Wolt has synced your cart to your phone!* You can now open your **Wolt mobile app** on your phone to review your items and pay with Apple Pay / Google Pay in 1 tap.\n\n"
-            "👇 Once placed, tap below to sync your virtual pantry memory:"
-        )
-        if msg:
-            await edit_safe(msg, success_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+        if budget_exceeded:
+            response_text = (
+                "🚨 *Budget Safety Alert!*\n\n"
+                f"💶 *Cart Total:* **{final_p:.2f} €**\n"
+                f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
+                "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
+                "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
+            )
+        elif paid_ok:
+            response_text = (
+                "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
+                f"💶 *Total Paid:* **{final_p:.2f} €**\n"
+                "📦 Items recorded into your pantry memory for next week."
+            )
         else:
-            await reply_safe(update, context, success_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            response_text = (
+                "🎉 *Cart Ready & Synchronized!*\n\n"
+                f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
+                "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
+                "👇 Once placed, tap below to sync your virtual pantry memory:"
+            )
+        if msg:
+            await edit_safe(msg, response_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        else:
+            await reply_safe(update, context, response_text, reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
         logger.error(f"Cart build failed: {e}", exc_info=True)
         if msg:
@@ -748,6 +898,7 @@ async def wolt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• *Browser Profile:* `{os.path.basename(profile_dir)}`\n\n"
         "💡 *Tips:*\n"
         "• Change store venue: `/store <store-slug> [city]`\n"
+        "• Configure Auto-Pay & Budget: `/settings`\n"
         "• When cart is built, items automatically sync to your Wolt phone app!"
     )
     keyboard = [
@@ -1011,6 +1162,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     data = query.data
     user_id = update.effective_user.id if update.effective_user else 0
     store, city, country = get_user_store_and_city(user_id)
+    cfg = get_user_config(user_id)
     wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
 
     if data == "btn_plan":
@@ -1021,8 +1173,23 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await pantry_command(update, context)
     elif data == "btn_pref":
         await preferences_command(update, context)
+    elif data == "btn_settings":
+        await settings_command(update, context)
     elif data == "btn_wolt_status":
         await wolt_command(update, context)
+    elif data == "btn_toggle_autopay":
+        current = cfg.get("auto_pay", False)
+        cfg["auto_pay"] = not current
+        save_user_config(cfg, user_id=user_id)
+        await settings_command(update, context)
+    elif data.startswith("btn_set_budget_"):
+        b_val = float(data.replace("btn_set_budget_", ""))
+        if b_val <= 0:
+            cfg["max_budget"] = None
+        else:
+            cfg["max_budget"] = b_val
+        save_user_config(cfg, user_id=user_id)
+        await settings_command(update, context)
     elif data == "btn_reset_pref":
         save_user_preferences({
             "diet_type": "omnivore",
@@ -1041,7 +1208,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         user_pending_plans[user_id] = items
         await query_edit_safe(query, f"🛒 Building sample grocery cart on Wolt ({store})...")
         try:
-            await asyncio.to_thread(
+            res = await asyncio.to_thread(
                 add_items_to_cart,
                 store,
                 items,
@@ -1058,6 +1225,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             ]
             sync_msg = (
                 "🎉 *Sample Cart Ready & Synchronized!*\n\n"
+                f"💶 *Cart Total:* **{res.get('final_price', 0.0):.2f} €**\n\n"
                 "📲 *Open your Wolt mobile app on your phone* to view your live synchronized basket and pay with 1 tap.\n\n"
                 "👇 Once you place the order, tap below to sync your pantry memory:"
             )
@@ -1065,53 +1233,74 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             logger.error(f"Error building sample cart: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
-    elif data == "btn_confirm_cart":
+    elif data in ["btn_confirm_cart", "btn_confirm_autopay"]:
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        await query_edit_safe(query, f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your Wolt phone app or browser.")
+        is_autopay_requested = (data == "btn_confirm_autopay") or cfg.get("auto_pay", False)
+        budget_limit = cfg.get("max_budget")
+
+        action_msg = "⚡ *Assembling Cart & Submitting Payment...*" if is_autopay_requested else "🛒 *Building Cart on Wolt...*"
+        await query_edit_safe(query, f"{action_msg}\nVenue: `{store}` ({len(items)} items).")
+
         try:
-            await asyncio.to_thread(
+            res = await asyncio.to_thread(
                 add_items_to_cart,
                 store,
                 items,
                 city=city,
                 country=country,
                 keep_open=True,
-                record_memory=False,
-                auto_pay=False,
-                user_id=user_id
+                record_memory=is_autopay_requested,
+                auto_pay=is_autopay_requested,
+                user_id=user_id,
+                budget=budget_limit
             )
-            keyboard = [
-                [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
-                [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
-            ]
-            sync_msg = (
-                "🎉 *Cart Ready & Synchronized!*\n\n"
-                "📲 *Wolt has synced your cart to your phone!* You can now simply open your **Wolt mobile app** on your phone to review your items and pay in 1 tap!\n\n"
-                "👇 Once placed, tap below to update your virtual pantry memory:"
-            )
-            await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            final_p = res.get("final_price", 0.0)
+            budget_exceeded = res.get("budget_exceeded", False)
+            paid_ok = res.get("auto_pay_success", False)
+
+            if budget_exceeded:
+                alert_text = (
+                    "🚨 *Budget Safety Alert — Payment Halted!*\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💶 *Final Cart Total:* **{final_p:.2f} €**\n"
+                    f"🚫 *Your Configured Budget:* **{budget_limit:.2f} €**\n\n"
+                    "⚠️ Auto-Pay was **automatically blocked** to protect your wallet!\n\n"
+                    "📲 All items are safely held in your Wolt basket. Open your **Wolt phone app** to review items and complete payment manually."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("📱 Open Wolt App", url=wolt_url)],
+                    [InlineKeyboardButton("💾 Sync Pantry Memory", callback_data="btn_record_last")]
+                ]
+                await query.message.reply_text(alert_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            elif paid_ok:
+                success_text = (
+                    "🎉 *Order Placed & Paid on Wolt!*\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💶 *Amount Charged:* **{final_p:.2f} €**\n"
+                    f"🏬 *Venue:* `{store}`\n\n"
+                    "📦 *Pantry memory has been automatically updated for next week!*"
+                )
+                keyboard = [
+                    [InlineKeyboardButton("📦 View Pantry Inventory", callback_data="btn_pantry")],
+                    [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+                ]
+                await query.message.reply_text(success_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                keyboard = [
+                    [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+                    [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
+                ]
+                sync_msg = (
+                    "🎉 *Cart Ready & Synchronized!*\n"
+                    "━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
+                    "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review your items and pay with Apple Pay / Google Pay / Card in 1 tap!\n\n"
+                    "👇 Once placed, tap below to update your virtual pantry memory:"
+                )
+                await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
-            logger.error(f"Error building cart: {e}", exc_info=True)
+            logger.error(f"Error executing cart flow: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
-    elif data == "btn_confirm_autopay":
-        items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        await query_edit_safe(query, f"💳 *Executing Full Auto-Pay on Wolt ({len(items)} items)...*\nSubmitting payment...")
-        try:
-            await asyncio.to_thread(
-                add_items_to_cart,
-                store,
-                items,
-                city=city,
-                country=country,
-                keep_open=True,
-                record_memory=True,
-                auto_pay=True,
-                user_id=user_id
-            )
-            await query.message.reply_text("✅ *Order Successfully Placed & Paid on Wolt!*\nPantry memory has been automatically updated for next week.")
-        except Exception as e:
-            logger.error(f"Error during auto-pay: {e}", exc_info=True)
-            await query.message.reply_text(f"⚠️ Error during auto-pay: {e}")
     elif data == "btn_today_menu":
         await menu_command(update, context)
     elif data == "btn_week_plan":
@@ -1301,6 +1490,9 @@ async def post_init(application):
         BotCommand("eat", "✅ Log a meal & deduct ingredients (/eat breakfast)"),
         BotCommand("week", "📅 Browse 7-day scheduled meal plan"),
         BotCommand("plan", "📋 Generate 7-day meal plan & Wolt cart list"),
+        BotCommand("settings", "⚙️ Configure Auto-Pay & Budget Limits"),
+        BotCommand("budget", "💶 Set max cart budget (/budget 50)"),
+        BotCommand("autopay", "💳 Toggle auto payment (/autopay on|off)"),
         BotCommand("pref", "👤 Dietary profile, allergies & household size"),
         BotCommand("pantry", "🏠 View virtual pantry memory & stock"),
         BotCommand("stock", "📦 Adjust ingredient stock (/stock eggs 10)"),
@@ -1347,6 +1539,10 @@ def main():
     app.add_handler(CommandHandler("dinner", dinner_command))
     app.add_handler(CommandHandler("snack", snack_command))
     app.add_handler(CommandHandler("eat", eat_command))
+    app.add_handler(CommandHandler("settings", settings_command))
+    app.add_handler(CommandHandler("cartflow", settings_command))
+    app.add_handler(CommandHandler("budget", budget_command))
+    app.add_handler(CommandHandler("autopay", autopay_command))
     app.add_handler(CommandHandler("setkey", setkey_command))
     app.add_handler(CommandHandler("stock", setstock_command))
     app.add_handler(CommandHandler("eggs", setstock_command))

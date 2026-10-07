@@ -1587,18 +1587,32 @@ def search_and_add_item(page, query_text, target_qty=1):
     price_final = get_cart_total_price(page)
     return price_final > initial_cart_price or price_final > 0
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False, user_id=None, headless=None):
-    """Executes the automated grocery shopping flow for the given items."""
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None):
+    """Executes the automated grocery shopping flow for the given items with budget enforcement."""
     user_browser_dir = get_user_browser_dir(user_id)
     if headless is None:
         headless = bool(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
     if headless:
         keep_open = False
         
+    user_cfg = get_user_config(user_id) if user_id else {}
+    if budget is None and user_cfg.get("max_budget"):
+        try:
+            budget = float(user_cfg["max_budget"])
+        except (ValueError, TypeError):
+            budget = None
+
     print(f"\n[*] 🛒 Starting grocery order for venue: '{store_slug}' ({city}, {country})...")
     print(f"[*] Telegram User Profile: {user_id or 'Default'} | Profile Dir: {user_browser_dir} | Headless: {headless}")
+    if budget:
+        print(f"[*] Max Cart Budget Limit: {budget:.2f} €")
     print(f"[*] Total items to process: {len(items)}\n")
     
+    paid_successfully = False
+    budget_exceeded = False
+    final_price = 0.0
+    added_count = 0
+
     with sync_playwright() as p:
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         context = p.chromium.launch_persistent_context(
@@ -1616,7 +1630,6 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         
         close_any_unwanted_modal(page, target_address=address)
 
-        added_count = 0
         current_cart_total = get_cart_total_price(page)
         print(f"[*] Initial cart total: {current_cart_total:.2f} €\n")
 
@@ -1677,13 +1690,6 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         print(f"🎉 Completed: {added_count}/{len(items)} items processed. Final Cart Total: {final_price:.2f} €")
         print("="*60)
         
-        # Record purchased items into persistent pantry memory state if explicitly enabled
-        if record_memory:
-            try:
-                record_purchase_in_memory(items, store_slug=store_slug, user_id=user_id)
-            except Exception as e:
-                print(f"[!] Warning: Could not record into pantry memory: {e}")
-
         # Open order summary for review or automated checkout
         try:
             view_order_btn = page.locator("button:has-text('View order'), button:has-text('Vaata tellimust'), button[aria-label*='View order']").first
@@ -1694,45 +1700,61 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         except Exception:
             pass
 
+        # Check budget limit before automated payment
         if auto_pay:
-            print("\n" + "!"*60)
-            print("⚠️ [EXPLICIT OPT-IN ACTION] --auto-pay flag detected!")
-            print(">>> Proceeding to automated checkout and payment submission...")
-            print("!"*60 + "\n")
-            try:
-                # 1. Click "Go to checkout" / "Mine kassasse" / "Jätka"
-                checkout_btn = page.locator(
-                    "button:has-text('Go to checkout'), button:has-text('Mine kassasse'), button:has-text('Jätka'), button[data-test-id*='checkout-button'], button:has-text('Checkout')"
-                ).first
-                if checkout_btn.is_visible(timeout=3000):
-                    click_element_safely(checkout_btn)
-                    print("[+] Proceeding to final checkout payment screen...")
-                    time.sleep(3.5)
+            if budget and final_price > budget:
+                budget_exceeded = True
+                print("\n" + "!"*60)
+                print(f"🛑 [BUDGET LIMIT EXCEEDED] Cart total ({final_price:.2f} €) exceeds set budget ({budget:.2f} €)!")
+                print(">>> Automated checkout is HALTED for your safety.")
+                print(">>> Items remain in cart for manual review and phone app confirmation.")
+                print("!"*60 + "\n")
+            else:
+                print("\n" + "!"*60)
+                print("⚠️ [AUTO-PAY EXECUTION] Proceeding to automated checkout...")
+                print("!"*60 + "\n")
+                try:
+                    # 1. Click "Go to checkout" / "Mine kassasse" / "Jätka"
+                    checkout_btn = page.locator(
+                        "button:has-text('Go to checkout'), button:has-text('Mine kassasse'), button:has-text('Jätka'), button[data-test-id*='checkout-button'], button:has-text('Checkout')"
+                    ).first
+                    if checkout_btn.is_visible(timeout=3000):
+                        click_element_safely(checkout_btn)
+                        print("[+] Proceeding to final checkout payment screen...")
+                        time.sleep(3.5)
 
-                # 2. Click final "Order and pay" / "Telli ja maksa" submit button
-                submit_pay_btn = page.locator(
-                    "button:has-text('Order and pay'), button:has-text('Telli ja maksa'), button:has-text('Place order'), button[data-test-id*='submit-order'], button[data-test-id*='order-submit']"
-                ).first
-                if submit_pay_btn.is_visible(timeout=5000):
-                    click_element_safely(submit_pay_btn)
-                    print("[🎉] Final payment button clicked! Waiting for order confirmation...")
-                    time.sleep(5.0)
-                    print("[✅] Order submission completed successfully!")
-                    try:
-                        record_purchase_in_memory(items, store_slug=store_slug, user_id=user_id)
-                    except Exception:
-                        pass
-                else:
-                    print("[!] Notice: Final payment button requires manual verification/interaction on screen.")
-            except Exception as e:
-                print(f"[!] Error during auto-pay checkout: {e}")
+                    # 2. Click final "Order and pay" / "Telli ja maksa" submit button
+                    submit_pay_btn = page.locator(
+                        "button:has-text('Order and pay'), button:has-text('Telli ja maksa'), button:has-text('Place order'), button[data-test-id*='submit-order'], button[data-test-id*='order-submit']"
+                    ).first
+                    if submit_pay_btn.is_visible(timeout=5000):
+                        click_element_safely(submit_pay_btn)
+                        print("[🎉] Final payment button clicked! Waiting for order confirmation...")
+                        time.sleep(5.0)
+                        paid_successfully = True
+                        print("[✅] Order submission completed successfully!")
+                        try:
+                            record_purchase_in_memory(items, store_slug=store_slug, user_id=user_id)
+                        except Exception:
+                            pass
+                    else:
+                        print("[!] Notice: Final payment button requires manual verification/interaction on screen.")
+                except Exception as e:
+                    print(f"[!] Error during auto-pay checkout: {e}")
         else:
             print("\n" + "="*60)
             print("🛡️ [SAFE CHECKOUT POLICY]")
             print("Cart is filled and ready on screen.")
-            print("To submit payment, click 'Order and pay' in the browser window.")
+            print("To submit payment, click 'Order and pay' in the browser window or phone app.")
             print("="*60 + "\n")
             
+        if record_memory and not paid_successfully:
+            if record_memory:
+                try:
+                    record_purchase_in_memory(items, store_slug=store_slug, user_id=user_id)
+                except Exception as e:
+                    print(f"[!] Warning: Could not record into pantry memory: {e}")
+
         if keep_open:
             print("\n[+] The process will terminate when you close the browser window.")
             try:
@@ -1744,6 +1766,16 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                 context.close()
             except Exception:
                 pass
+
+    return {
+        "items_added": added_count,
+        "total_items": len(items),
+        "final_price": final_price,
+        "auto_pay_attempted": auto_pay,
+        "auto_pay_success": paid_successfully,
+        "budget_exceeded": budget_exceeded,
+        "max_budget": budget
+    }
 
 def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn", country="est", address=None, output_file=None, user_id=None, headless=None):
     """Explores the Wolt store venue in real time to discover active deals and verify available products, prices, and package sizes."""
