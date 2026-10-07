@@ -13,15 +13,14 @@ DEFAULT_USER = os.getenv("RPI_USER", "andres")
 REMOTE_DIR = os.getenv("RPI_DIR", "/home/andres/wolt-smart-pantry")
 SERVICE_NAME = "wolt-bot"
 
-def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER):
+def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER, allocate_tty=True):
     target = f"{user}@{host}"
-    ssh_cmd = ["ssh", "-o", "ConnectTimeout=10", target, cmd]
+    ssh_cmd = ["ssh", "-o", "ConnectTimeout=15"]
+    if allocate_tty:
+        ssh_cmd.append("-t")
+    ssh_cmd.extend([target, cmd])
     print(f"[*] Executing on {target}: {cmd}")
-    res = subprocess.run(ssh_cmd, capture_output=True, text=True)
-    if res.stdout:
-        print(res.stdout)
-    if res.stderr:
-        print(res.stderr, file=sys.stderr)
+    res = subprocess.run(ssh_cmd)
     return res.returncode
 
 def copy_ssh_key(host=DEFAULT_HOST, user=DEFAULT_USER):
@@ -46,6 +45,7 @@ def deploy(host=DEFAULT_HOST, user=DEFAULT_USER, remote_dir=REMOTE_DIR):
     deploy_cmd = (
         f"cd {remote_dir} && "
         f"git pull origin main && "
+        f"if [ -d venv ]; then venv/bin/pip install -q -r requirements.txt; fi && "
         f"sudo systemctl restart {SERVICE_NAME} && "
         f"systemctl is-active {SERVICE_NAME}"
     )
