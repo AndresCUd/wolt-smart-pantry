@@ -1045,6 +1045,46 @@ async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_safe(update, context, "✅ *Gemini API Key Saved for Your Profile!* Visual meal photo recognition & pantry photo audits are active with Gemini 3.8 Flash.")
 
 @auth_guard
+async def setjev_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Configures or updates TYPESAFE_API_KEY for Jev AI System-1 decision routing: /setjev <key>"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args if context.args else []
+    if not args:
+        cfg = get_user_config(user_id)
+        current_status = "Configured for User" if cfg.get("typesafe_api_key") else ("Configured Globally" if os.getenv("TYPESAFE_API_KEY") else "Not configured")
+        await reply_safe(update, context, f"⚡ *Jev AI Key Status:* `{current_status}`\n\nTo configure, run:\n`/setjev YOUR_TYPESAFE_API_KEY`\n\n_(Enables ultra-fast sub-200ms System-1 intent classification)_")
+        return
+    
+    key = args[0].strip()
+    cfg = get_user_config(user_id)
+    cfg["typesafe_api_key"] = key
+    save_user_config(cfg, user_id=user_id)
+    os.environ["TYPESAFE_API_KEY"] = key
+    
+    # Save to .env file for global fallback
+    env_file = os.path.join(BASE_DIR, ".env")
+    lines = []
+    if os.path.exists(env_file):
+        with open(env_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+            
+    key_found = False
+    new_lines = []
+    for line in lines:
+        if line.startswith("TYPESAFE_API_KEY="):
+            new_lines.append(f"TYPESAFE_API_KEY={key}\n")
+            key_found = True
+        else:
+            new_lines.append(line)
+    if not key_found:
+        new_lines.append(f"\nTYPESAFE_API_KEY={key}\n")
+        
+    with open(env_file, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+        
+    await reply_safe(update, context, "⚡ *Jev AI (TypeSafe) API Key Saved!* Ultra-fast System-1 decision routing is now active for your profile.")
+
+@auth_guard
 async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adjusts specific stock levels or instructs how to restock via photo: /stock eggs 10"""
     user_id = update.effective_user.id if update.effective_user else 0
@@ -2025,6 +2065,7 @@ async def post_init(application):
         BotCommand("wolt", "🛍️ Check isolated Wolt browser session"),
         BotCommand("store", "🏬 Change Wolt store venue (/store wolt-market-maakri)"),
         BotCommand("setkey", "🔑 Configure Gemini API key for photo vision"),
+        BotCommand("setjev", "⚡ Configure Jev AI key for sub-200ms decision routing"),
         BotCommand("stop", "🛑 Abort running cart creation or scan"),
         BotCommand("logs", "📜 View live system logs on PC (/logs 25)"),
         BotCommand("help", "📖 View complete command guide"),
@@ -2072,6 +2113,7 @@ def main():
     app.add_handler(CommandHandler("budget", budget_command))
     app.add_handler(CommandHandler("autopay", autopay_command))
     app.add_handler(CommandHandler("setkey", setkey_command))
+    app.add_handler(CommandHandler("setjev", setjev_command))
     app.add_handler(CommandHandler("stock", setstock_command))
     app.add_handler(CommandHandler("eggs", setstock_command))
     app.add_handler(CommandHandler("preferences", preferences_command))

@@ -137,10 +137,74 @@ def is_user_aborted(user_id=None) -> bool:
     return ev.is_set() if ev else False
 
 def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
-    """Parses a conversational user message into structured intent and parameters using Gemini 3.8 Flash or regex fallback."""
+    """Parses a conversational user message into structured intent and parameters using Jev AI (System-1), Gemini 3.8 Flash, or regex fallback."""
     cfg = get_user_config(user_id) if user_id else {}
-    api_key = cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
     
+    # Stage 1: Ultra-Fast System-1 Decision Layer via Jev AI (TypeSafe AI)
+    typesafe_key = cfg.get("typesafe_api_key") or os.getenv("TYPESAFE_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+    if typesafe_key:
+        try:
+            from typesafe_sdk import TypeSafeClient, Choice
+            with TypeSafeClient(api_key=typesafe_key) as ts_client:
+                res = ts_client.system_one(
+                    state={"message": user_text},
+                    questions={
+                        "intent": Choice(
+                            instructions="Classify the user command intent for the pantry and grocery shopping bot.",
+                            criteria={
+                                "today_menu": "Asking about today's meal, lunch, dinner, breakfast, or what to eat",
+                                "recipe": "Asking for cooking recipes or preparation instructions",
+                                "week_plan": "Viewing scheduled 7-day meal plan",
+                                "plan_week": "Generating new weekly meal plan or shopping list",
+                                "build_cart": "Buying or adding items to Wolt cart",
+                                "log_meal": "Reporting food eaten/consumed",
+                                "restock": "Reporting groceries bought or stock inventory updates",
+                                "pantry_status": "Checking fridge, freezer, or pantry inventory",
+                                "deals": "Scanning discounts, sales, or deals on Wolt",
+                                "set_budget": "Setting maximum cart budget ceiling",
+                                "set_autopay": "Toggling 1-click auto-pay mode on or off",
+                                "change_store": "Changing store venue or city",
+                                "preferences": "Updating allergies, dietary profile, or household size",
+                                "wolt_status": "Checking Wolt browser session or venue",
+                                "stop": "Aborting, stopping, or cancelling an operation",
+                                "chef_chat": "General greeting, culinary advice, or question"
+                            }
+                        )
+                    }
+                )
+                chosen = res.choices["intent"].choice
+                if chosen:
+                    params = {}
+                    low = user_text.lower().strip()
+                    if chosen == "set_budget":
+                        m = re.findall(r'(\d+(?:[.,]\d+)?)', low)
+                        if m:
+                            params["budget_amount"] = float(m[0].replace(",", "."))
+                    elif chosen == "set_autopay":
+                        params["autopay_value"] = False if any(w in low for w in ["off", "disable", "no", "stop", "false", "review"]) else True
+                    elif chosen in ["today_menu", "log_meal"]:
+                        meal_type = "lunch"
+                        if "breakfast" in low: meal_type = "breakfast"
+                        elif "dinner" in low: meal_type = "dinner"
+                        elif "snack" in low: meal_type = "snack"
+                        params["meal_type"] = meal_type
+                    elif chosen == "recipe":
+                        params["dish_or_ingredients"] = user_text
+                    elif chosen == "change_store":
+                        parts = user_text.split()
+                        if len(parts) > 1:
+                            params["store_slug"] = parts[-2] if len(parts) > 2 else parts[-1]
+                    return {
+                        "intent": chosen,
+                        "parameters": params,
+                        "chef_reply": "I'm your Wolt Smart Pantry Chef! How can I assist you?",
+                        "classifier": "jev-ai"
+                    }
+        except Exception as e:
+            print(f"[!] Jev AI decision error: {e}")
+
+    # Stage 2: Deep Multimodal / Generative Parsing via Gemini 3.8 Flash
+    api_key = cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
     if api_key:
         for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
             try:
