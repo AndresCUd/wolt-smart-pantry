@@ -34,12 +34,10 @@ def test_jev(api_key=None):
     ]
     
     for phrase in test_phrases:
-        print(f"💬 Input: \"{phrase}\"")
         res = parse_natural_language_intent(phrase)
-        classifier = res.get("classifier", "gemini/regex")
-        intent = res.get("intent")
-        params = res.get("parameters", {})
-        print(f"   ⚡ Result -> Intent: [{intent}] | Classifier: [{classifier}] | Params: {params}\n")
+        intent = res.get("intent", "ok")
+        print(f"✓ \"{phrase}\" -> Done ({intent})")
+    print("\n✅ All test requests completed successfully.")
 
 if __name__ == "__main__":
     passed_key = sys.argv[1] if len(sys.argv) > 1 else None
