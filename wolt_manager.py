@@ -459,11 +459,247 @@ def display_user_preferences():
     print("="*60 + "\n")
     return prefs
 
+def call_gemini_api(prompt: str, api_key: str, model_name: str = "gemini-2.0-flash", json_mode: bool = False) -> str:
+    """Calls Gemini API using google-genai SDK, google-generativeai, or zero-dependency direct REST HTTP."""
+    if not api_key:
+        return ""
+
+    # 1. Try official google-genai SDK
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        cfg = {"response_mime_type": "application/json"} if json_mode else {}
+        resp = client.models.generate_content(model=model_name, contents=prompt, config=cfg)
+        if hasattr(resp, "text") and resp.text:
+            return resp.text.strip()
+    except Exception:
+        pass
+
+    # 2. Try legacy google.generativeai SDK
+    try:
+        import google.generativeai as genai_legacy
+        genai_legacy.configure(api_key=api_key)
+        m = genai_legacy.GenerativeModel(model_name)
+        resp = m.generate_content(prompt)
+        if hasattr(resp, "text") and resp.text:
+            return resp.text.strip()
+    except Exception:
+        pass
+
+    # 3. Direct Zero-Dependency REST API (works on any platform)
+    try:
+        import urllib.request
+        target_model = model_name if "gemini" in model_name else "gemini-2.0-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{target_model}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}]
+        }
+        if json_mode:
+            payload["generationConfig"] = {"responseMimeType": "application/json"}
+        req_data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_body = json.loads(response.read().decode("utf-8"))
+            candidates = res_body.get("candidates", [])
+            if candidates:
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if parts and "text" in parts[0]:
+                    return parts[0]["text"].strip()
+    except Exception as e:
+        print(f"[!] Gemini REST API call failed: {e}")
+
+    return ""
+
+def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None) -> dict:
+    """Generates a fully dynamic 7-day culinary meal plan using Gemini 3.8 Flash based on in-stock ingredients & preferences."""
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        
+    if not api_key:
+        return None
+        
+    if prefs is None:
+        prefs = load_user_preferences(user_id=user_id)
+        
+    diet = prefs.get("diet_type", "omnivore")
+    h_size = max(1, prefs.get("household_size", 1))
+    allergies = ", ".join(prefs.get("allergies", [])) or "None"
+    avoided = ", ".join(prefs.get("avoided_ingredients", [])) or "None"
+    
+    raw_p_g = int(215 * h_size)
+    cooked_p_g = int(150 * h_size)
+    
+    known_items = []
+    if inventory_items:
+        for it in inventory_items:
+            name = it[0] if isinstance(it, (tuple, list)) else (it.get("name") or it.get("query") if isinstance(it, dict) else str(it))
+            known_items.append(name)
+    else:
+        pantry = load_pantry_memory(user_id=user_id)
+        for p in pantry.get("proteins", []):
+            known_items.append(f"{p.get('name')} (x{p.get('qty', 1)})")
+        for pr in pantry.get("produce", []):
+            known_items.append(f"{pr.get('name')} (x{pr.get('qty', 1)})")
+        for s in pantry.get("staples", []):
+            known_items.append(f"{s.get('name')}")
+        if not known_items:
+            candidate = get_candidate_grocery_list(prefs, user_id=user_id)
+            for it in candidate:
+                known_items.append(f"{it[0]} (x{it[1]})")
+
+    items_str = ", ".join(known_items) if known_items else "Standard fresh groceries"
+
+    prompt = f"""
+You are an executive private chef and certified nutritionist.
+Create an innovative, gourmet, and realistic 7-Day Meal Plan (Monday to Sunday) for {h_size} person(s).
+
+Available in-stock pantry items & groceries: {items_str}.
+Dietary Profile: {diet}.
+Allergies (STRICTLY AVOID): {allergies}.
+Disliked/Avoided ingredients: {avoided}.
+Protein Target: ~{raw_p_g}g raw per meal (yields ~{cooked_p_g}g cooked per person accounting for 30% thermal cooking shrinkage).
+
+Freshness Schedule Rules:
+- Monday & Tuesday (Tier 1: Ultra-Fresh): Prioritize delicate leafy greens (arugula/spinach), fresh raw minced meats / fish, and ripe avocados.
+- Wednesday & Thursday (Tier 2: Resilient Produce & Poultry): Chicken breast fillets, bell peppers, broccoli, carrots, and eggs.
+- Friday & Saturday (Tier 3: Hearty Proteins & Pantry Reserves): Cheeses (mozzarella), pasta bakes, burger bowls, grains, canned passata.
+- Sunday (Tier 4: Fridge Clearing & Reset): Big vegetable & egg frittata or clearing skillet before next grocery delivery.
+
+For every day (Monday to Sunday), provide:
+1. breakfast (title, protein_raw, ingredients list, tip with precise culinary heat/technique)
+2. lunch (title, protein_raw, ingredients list, tip with precise culinary heat/technique)
+3. dinner (title, protein_raw, ingredients list, tip with precise culinary heat/technique)
+4. snack (title, ingredients list)
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+  "household_size": {h_size},
+  "diet_type": "{diet}",
+  "days": [
+    {{
+      "day_index": 0,
+      "day_name": "Monday",
+      "freshness_tier": "Tier 1: Ultra-Fresh (48h max)",
+      "freshness_alert": "Consume fresh leafy greens & fresh ground meat first!",
+      "breakfast": {{
+        "title": "Dish Name",
+        "protein_raw": "3 Farm eggs",
+        "ingredients": ["Eggs", "Toast", "Avocado"],
+        "tip": "Chef cooking technique with pan temperature and timing"
+      }},
+      "lunch": {{
+        "title": "Dish Name",
+        "protein_raw": "{raw_p_g}g beef (yields ~{cooked_p_g}g cooked)",
+        "ingredients": ["Ground beef", "Red bell pepper", "Rice"],
+        "tip": "High-heat searing technique"
+      }},
+      "dinner": {{
+        "title": "Dish Name",
+        "protein_raw": "{raw_p_g}g chicken (yields ~{cooked_p_g}g cooked)",
+        "ingredients": ["Chicken breast", "Arugula", "Cherry tomatoes"],
+        "tip": "Butter basting technique"
+      }},
+      "snack": {{
+        "title": "Snack Name",
+        "ingredients": ["Banana", "Dark chocolate"]
+      }}
+    }}
+  ]
+}}
+"""
+
+    for model_name in ["gemini-flash-lite-latest", "gemini-flash-latest"]:
+        try:
+            resp_text = call_gemini_api(prompt, api_key=api_key, model_name=model_name, json_mode=True)
+            if resp_text and resp_text.strip():
+                clean_json = resp_text.strip()
+                if clean_json.startswith("```"):
+                    clean_json = re.sub(r'^```(?:json)?\n', '', clean_json)
+                    clean_json = re.sub(r'\n```$', '', clean_json)
+                plan_data = json.loads(clean_json)
+                if plan_data.get("days") and len(plan_data["days"]) >= 7:
+                    plan_data["last_generated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                    print(f"[✨] Dynamic 7-day meal plan generated by Gemini ({model_name})!")
+                    return plan_data
+        except Exception as e:
+            print(f"[!] Gemini AI meal plan error with {model_name}: {e}")
+
+    return None
+
+def generate_ai_meal_swap(meal_type="lunch", current_title="", in_stock_ingredients=None, prefs=None, api_key=None, user_id=None) -> dict:
+    """Generates an alternative dish recommendation dynamically using Gemini 3.8 Flash."""
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
+    if not api_key:
+        api_key = os.getenv("GEMINI_API_KEY", "")
+    if not api_key:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        
+    if prefs is None:
+        prefs = load_user_preferences(user_id=user_id)
+        
+    diet = prefs.get("diet_type", "omnivore")
+    h_size = max(1, prefs.get("household_size", 1))
+    allergies = ", ".join(prefs.get("allergies", [])) or "None"
+    avoided = ", ".join(prefs.get("avoided_ingredients", [])) or "None"
+    ing_text = ", ".join(in_stock_ingredients) if in_stock_ingredients else "available in-stock pantry items"
+
+    if api_key:
+        prompt = f"""
+You are an executive private chef.
+Suggest an appetizing, distinct alternative {meal_type} dish to replace '{current_title}' for {h_size} person(s).
+Available ingredients: {ing_text}.
+Diet: {diet}. Strictly avoid allergies: {allergies}. Disliked: {avoided}.
+
+Respond ONLY with valid JSON:
+{{
+  "title": "Gourmet Dish Name",
+  "protein_raw": "Protein weight raw (yields cooked)",
+  "ingredients": ["Item 1", "Item 2"],
+  "tip": "Chef cooking technique with pan heat and tips"
+}}
+"""
+        for model_name in ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]:
+            try:
+                resp_text = call_gemini_api(prompt, api_key=api_key, model_name=model_name, json_mode=True)
+                if resp_text and resp_text.strip():
+                    clean = resp_text.strip()
+                    if clean.startswith("```"):
+                        clean = re.sub(r'^```(?:json)?\n', '', clean)
+                        clean = re.sub(r'\n```$', '', clean)
+                    return json.loads(clean)
+            except Exception as e:
+                print(f"[!] Gemini meal swap error: {e}")
+
+    # Fallback dish
+    return {
+        "title": "Pan-Seared Herb Protein with Roasted Vegetables",
+        "protein_raw": f"{int(215 * h_size)}g protein",
+        "ingredients": ["Protein cut", "Fresh vegetables", "Olive oil & garlic"],
+        "tip": "Sear protein 4 mins per side on high heat. Toss vegetables with olive oil and garlic."
+    }
+
 def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None):
     """Generates an inventory-aligned, 7-day meal plan with breakfast, lunch, dinner, and snacks.
+    Dynamically uses Gemini 3.8 Flash when configured, with robust deterministic fallback.
     Respects cooking thermal shrinkage (W_raw = W_cooked / 0.70), user allergies, and freshness tiers."""
     if prefs is None:
         prefs = load_user_preferences(user_id=user_id)
+        
+    # 0. Attempt Dynamic AI Meal Plan Generation with Gemini
+    ai_plan = generate_ai_weekly_meal_plan(inventory_items=inventory_items, prefs=prefs, user_id=user_id)
+    if ai_plan:
+        return ai_plan
     
     diet = prefs.get("diet_type", "omnivore").lower()
     h_size = max(1, prefs.get("household_size", 1))
@@ -979,11 +1215,7 @@ def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = N
     h_size = prefs.get("household_size", 1)
 
     if api_key:
-        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
-            try:
-                from google import genai
-                client = genai.Client(api_key=api_key)
-                prompt = f"""
+        prompt = f"""
 You are an award-winning private chef.
 Create a practical, gourmet step-by-step recipe for '{dish_name}' serving {h_size} person(s).
 
@@ -1009,11 +1241,9 @@ Format your response in clean GitHub Markdown for Telegram mobile chat:
 🥗 *Plating & Serving Suggestion:*
 (Short appetizing presentation tip)
 """
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt
-                )
-                resp_text = response.text if hasattr(response, "text") else str(response)
+        for model_name in ["gemini-flash-lite-latest", "gemini-flash-latest"]:
+            try:
+                resp_text = call_gemini_api(prompt, api_key=api_key, model_name=model_name, json_mode=False)
                 if resp_text and resp_text.strip():
                     return resp_text.strip()
             except Exception as e:

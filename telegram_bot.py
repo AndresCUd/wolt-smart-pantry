@@ -60,6 +60,8 @@ from wolt_manager import (
     deduct_custom_ingredients,
     restock_pantry_from_detected_items,
     generate_ai_recipe,
+    generate_ai_meal_swap,
+    generate_ai_weekly_meal_plan,
     generate_weekly_meal_plan,
     generate_default_weekly_plan,
     get_candidate_grocery_list,
@@ -1510,17 +1512,33 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         day_idx = min(6, max(0, now.weekday()))
         if days and day_idx < len(days):
             current_lunch = days[day_idx]["lunch"]["title"]
-            alternates = [
-                {"title": "Pan-Seared Salmon with Herb Rice", "tip": "Quick 12-min bake with lemon, dill & olive oil."},
-                {"title": "Crispy Garlic Chicken Breast & Broccoli", "tip": "High protein, pan-seared with garlic butter."},
-                {"title": "Lean Beef & Sweet Pepper Stir-Fry", "tip": "High heat sear with soy sauce & sesame oil."},
-                {"title": "Creamy Mozzarella & Tomato Passata Penne", "tip": "Italian comfort bowl with fresh basil."}
-            ]
-            alt = next((a for a in alternates if a["title"] != current_lunch), alternates[0])
-            days[day_idx]["lunch"]["title"] = alt["title"]
-            days[day_idx]["lunch"]["tip"] = alt["tip"]
+            pantry = load_pantry_memory(user_id=user_id)
+            stock_items = [p.get("name") for p in pantry.get("proteins", [])] + [pr.get("name") for pr in pantry.get("produce", [])]
+            
+            await query_edit_safe(query, "👨‍🍳 *Chef AI is crafting an innovative alternative lunch for today...*")
+            alt = await asyncio.to_thread(
+                generate_ai_meal_swap,
+                "lunch",
+                current_lunch,
+                stock_items,
+                load_user_preferences(user_id=user_id),
+                None,
+                user_id
+            )
+            days[day_idx]["lunch"]["title"] = alt.get("title", "Gourmet Chef Special")
+            days[day_idx]["lunch"]["tip"] = alt.get("tip", "Cook with care and season to taste.")
+            if "ingredients" in alt:
+                days[day_idx]["lunch"]["ingredients"] = alt["ingredients"]
+            if "protein_raw" in alt:
+                days[day_idx]["lunch"]["protein_raw"] = alt["protein_raw"]
             save_meal_plan(plan, user_id=user_id)
-            await query_edit_safe(query, f"🔄 *Meal Swapped for Today!*\n\n🥗 *New Lunch:* {alt['title']}\n💡 _{alt['tip']}_")
+            await query.message.reply_text(
+                f"🔄 *Meal Swapped for Today!*\n\n"
+                f"🥗 *New Lunch:* {alt.get('title')}\n"
+                f"⚖️ *Target:* `{alt.get('protein_raw', '')}`\n\n"
+                f"👨‍🍳 *Chef Technique:*\n{alt.get('tip', '')}",
+                parse_mode="Markdown"
+            )
         else:
             await query_edit_safe(query, "🔄 Generated fresh meal plan variation.")
     elif data == "btn_record_last":
