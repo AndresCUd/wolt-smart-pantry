@@ -743,7 +743,25 @@ def get_day_menu_formatted(day_index=None, user_id=None):
     dinner = day_data.get("dinner", {})
     snack = day_data.get("snack", {})
 
+    # Check if virtual pantry memory is empty
+    pantry_data = load_pantry_memory(user_id=user_id)
+    staples = pantry_data.get("staples", [])
+    proteins = pantry_data.get("proteins", [])
+    produce = pantry_data.get("produce", [])
+    history = pantry_data.get("purchase_history", [])
+    is_pantry_empty = not (staples or proteins or produce or history)
+    
+    pantry_notice = ""
+    if is_pantry_empty:
+        pantry_notice = (
+            "⚠️ *Despensa Vacía / Empty Pantry Notice:*\n"
+            "• _Tu memoria virtual de despensa aún no tiene productos registrados._\n"
+            "• _Este menú es tu plan recomendado semanal. Usa `/plan` para generar tu lista de compras en Wolt o envía una foto con `/stock` para añadir tus ingredientes._\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+
     text = (
+        f"{pantry_notice}"
         f"🌅 *TODAY'S MENU — {date_str}*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 *Portions:* {h_size} person(s) | 📅 *Schedule:* Day {day_index + 1}/7 ({day_data.get('day_name', 'Today')})\n"
@@ -838,6 +856,10 @@ def get_single_meal_formatted(meal_type="lunch", day_index=None, user_id=None):
             f"• 🍫 *Dark Chocolate:* {2 * h_size} squares 70%+ dark chocolate (~20g)"
         ]
 
+    pantry_data = load_pantry_memory(user_id=user_id)
+    is_pantry_empty = not (pantry_data.get("staples") or pantry_data.get("proteins") or pantry_data.get("produce") or pantry_data.get("purchase_history"))
+    p_note = "\n⚠️ _Nota: Despensa vacía. Usa `/plan` para pedir en Wolt o `/stock` para añadir stock._" if is_pantry_empty else ""
+
     text = (
         f"{emoji} *{meal_type.upper()}: {meal.get('title', 'Meal')}*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
@@ -851,7 +873,7 @@ def get_single_meal_formatted(meal_type="lunch", day_index=None, user_id=None):
         f"{meal.get('tip', 'Cook with care and season to taste.')}\n\n"
         
         f"🧊 *Freshness Tier:* `{day_data.get('freshness_tier', 'Standard')}`\n"
-        f"💡 _{day_data.get('freshness_alert', '')}_"
+        f"💡 _{day_data.get('freshness_alert', '')}_{p_note}"
     )
     return text, meal
 
