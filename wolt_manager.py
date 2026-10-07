@@ -140,17 +140,19 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
     """Parses a conversational user message into structured intent and parameters using Jev AI (System-1), Gemini 3.8 Flash, or regex fallback."""
     cfg = get_user_config(user_id) if user_id else {}
     
-    # Stage 1: Ultra-Fast System-1 Decision Layer via Jev AI (TypeSafe AI)
-    typesafe_key = cfg.get("typesafe_api_key") or os.getenv("TYPESAFE_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
-    if typesafe_key:
+    # Stage 1: Ultra-Fast System-1 Decision Layer via Jev AI (https://jev-ai.pro)
+    jev_key = cfg.get("jev_ai_api_key") or cfg.get("typesafe_api_key") or os.getenv("JEV_AI_API_KEY") or os.getenv("TYPESAFE_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+    if jev_key:
+        chosen = None
+        # Option A: Official TypeSafe SDK configured with Jev AI base URL (https://jev-ai.pro/api)
         try:
             from typesafe_sdk import TypeSafeClient, Choice
-            with TypeSafeClient(api_key=typesafe_key) as ts_client:
+            with TypeSafeClient(api_key=jev_key, base_url="https://jev-ai.pro/api") as ts_client:
                 res = ts_client.system_one(
                     state={"message": user_text},
                     questions={
                         "intent": Choice(
-                            instructions="Classify the user command intent for the pantry and grocery shopping bot.",
+                            instructions="Classify the user command intent for the Wolt pantry and grocery shopping bot.",
                             criteria={
                                 "today_menu": "Asking about today's meal, lunch, dinner, breakfast, or what to eat",
                                 "recipe": "Asking for cooking recipes or preparation instructions",
@@ -172,36 +174,87 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
                         )
                     }
                 )
-                chosen = res.choices["intent"].choice
-                if chosen:
-                    params = {}
-                    low = user_text.lower().strip()
-                    if chosen == "set_budget":
-                        m = re.findall(r'(\d+(?:[.,]\d+)?)', low)
-                        if m:
-                            params["budget_amount"] = float(m[0].replace(",", "."))
-                    elif chosen == "set_autopay":
-                        params["autopay_value"] = False if any(w in low for w in ["off", "disable", "no", "stop", "false", "review"]) else True
-                    elif chosen in ["today_menu", "log_meal"]:
-                        meal_type = "lunch"
-                        if "breakfast" in low: meal_type = "breakfast"
-                        elif "dinner" in low: meal_type = "dinner"
-                        elif "snack" in low: meal_type = "snack"
-                        params["meal_type"] = meal_type
-                    elif chosen == "recipe":
-                        params["dish_or_ingredients"] = user_text
-                    elif chosen == "change_store":
-                        parts = user_text.split()
-                        if len(parts) > 1:
-                            params["store_slug"] = parts[-2] if len(parts) > 2 else parts[-1]
-                    return {
-                        "intent": chosen,
-                        "parameters": params,
-                        "chef_reply": "I'm your Wolt Smart Pantry Chef! How can I assist you?",
-                        "classifier": "jev-ai"
-                    }
+                if hasattr(res, "choices") and "intent" in res.choices:
+                    chosen = res.choices["intent"].choice
+                elif hasattr(res, "answers") and "intent" in res.answers:
+                    chosen = res.answers["intent"].get("choice")
         except Exception as e:
-            print(f"[!] Jev AI decision error: {e}")
+            # Option B: Direct HTTP POST to https://jev-ai.pro/api/v1/systemone
+            try:
+                import urllib.request
+                req_payload = {
+                    "state": user_text,
+                    "model": "jev-latest",
+                    "questions": {
+                        "intent": {
+                            "type": "choice",
+                            "instructions": "Classify user command intent for the pantry and grocery shopping bot.",
+                            "criteria": {
+                                "today_menu": "Asking about today's meal, lunch, dinner, breakfast, or what to eat",
+                                "recipe": "Asking for cooking recipes or preparation instructions",
+                                "week_plan": "Viewing scheduled 7-day meal plan",
+                                "plan_week": "Generating new weekly meal plan or shopping list",
+                                "build_cart": "Buying or adding items to Wolt cart",
+                                "log_meal": "Reporting food eaten/consumed",
+                                "restock": "Reporting groceries bought or stock inventory updates",
+                                "pantry_status": "Checking fridge, freezer, or pantry inventory",
+                                "deals": "Scanning discounts, sales, or deals on Wolt",
+                                "set_budget": "Setting maximum cart budget ceiling",
+                                "set_autopay": "Toggling 1-click auto-pay mode on or off",
+                                "change_store": "Changing store venue or city",
+                                "preferences": "Updating allergies, dietary profile, or household size",
+                                "wolt_status": "Checking Wolt browser session or venue",
+                                "stop": "Aborting, stopping, or cancelling an operation",
+                                "chef_chat": "General greeting, culinary advice, or question"
+                            }
+                        }
+                    }
+                }
+                req_data = json.dumps(req_payload).encode("utf-8")
+                req = urllib.request.Request(
+                    "https://jev-ai.pro/api/v1/systemone",
+                    data=req_data,
+                    headers={
+                        "Authorization": f"Bearer {jev_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "WoltSmartPantryBot/1.0"
+                    }
+                )
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+                    answers = res_body.get("answers", {})
+                    if "intent" in answers:
+                        chosen = answers["intent"].get("choice")
+            except Exception as e2:
+                print(f"[!] Jev AI HTTP endpoint error: {e2}")
+
+        if chosen:
+            params = {}
+            low = user_text.lower().strip()
+            if chosen == "set_budget":
+                m = re.findall(r'(\d+(?:[.,]\d+)?)', low)
+                if m:
+                    params["budget_amount"] = float(m[0].replace(",", "."))
+            elif chosen == "set_autopay":
+                params["autopay_value"] = False if any(w in low for w in ["off", "disable", "no", "stop", "false", "review"]) else True
+            elif chosen in ["today_menu", "log_meal"]:
+                meal_type = "lunch"
+                if "breakfast" in low: meal_type = "breakfast"
+                elif "dinner" in low: meal_type = "dinner"
+                elif "snack" in low: meal_type = "snack"
+                params["meal_type"] = meal_type
+            elif chosen == "recipe":
+                params["dish_or_ingredients"] = user_text
+            elif chosen == "change_store":
+                parts = user_text.split()
+                if len(parts) > 1:
+                    params["store_slug"] = parts[-2] if len(parts) > 2 else parts[-1]
+            return {
+                "intent": chosen,
+                "parameters": params,
+                "chef_reply": "I'm your Wolt Smart Pantry Chef! How can I assist you?",
+                "classifier": "jev-ai"
+            }
 
     # Stage 2: Deep Multimodal / Generative Parsing via Gemini 3.8 Flash
     api_key = cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")

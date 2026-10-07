@@ -1046,19 +1046,28 @@ async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auth_guard
 async def setjev_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Configures or updates TYPESAFE_API_KEY for Jev AI System-1 decision routing: /setjev <key>"""
+    """Configures or updates JEV_AI_API_KEY for Jev AI (https://jev-ai.pro) System-1 decision routing: /setjev <key>"""
     user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
     if not args:
         cfg = get_user_config(user_id)
-        current_status = "Configured for User" if cfg.get("typesafe_api_key") else ("Configured Globally" if os.getenv("TYPESAFE_API_KEY") else "Not configured")
-        await reply_safe(update, context, f"⚡ *Jev AI Key Status:* `{current_status}`\n\nTo configure, run:\n`/setjev YOUR_TYPESAFE_API_KEY`\n\n_(Enables ultra-fast sub-200ms System-1 intent classification)_")
+        current_status = "Configured for User" if (cfg.get("jev_ai_api_key") or cfg.get("typesafe_api_key")) else ("Configured Globally" if (os.getenv("JEV_AI_API_KEY") or os.getenv("TYPESAFE_API_KEY")) else "Not configured")
+        await reply_safe(
+            update, 
+            context, 
+            f"⚡ *Jev AI Key Status:* `{current_status}`\n\n"
+            "To configure your key from https://jev-ai.pro/jev-api, run:\n"
+            "`/setjev YOUR_JEV_AI_API_KEY`\n\n"
+            "_(Enables ultra-fast sub-200ms System-1 decision routing to https://jev-ai.pro/api/v1/systemone)_"
+        )
         return
     
     key = args[0].strip()
     cfg = get_user_config(user_id)
+    cfg["jev_ai_api_key"] = key
     cfg["typesafe_api_key"] = key
     save_user_config(cfg, user_id=user_id)
+    os.environ["JEV_AI_API_KEY"] = key
     os.environ["TYPESAFE_API_KEY"] = key
     
     # Save to .env file for global fallback
@@ -1068,21 +1077,23 @@ async def setjev_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(env_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
             
-    key_found = False
+    key_found_jev = False
     new_lines = []
     for line in lines:
-        if line.startswith("TYPESAFE_API_KEY="):
+        if line.startswith("JEV_AI_API_KEY="):
+            new_lines.append(f"JEV_AI_API_KEY={key}\n")
+            key_found_jev = True
+        elif line.startswith("TYPESAFE_API_KEY="):
             new_lines.append(f"TYPESAFE_API_KEY={key}\n")
-            key_found = True
         else:
             new_lines.append(line)
-    if not key_found:
-        new_lines.append(f"\nTYPESAFE_API_KEY={key}\n")
+    if not key_found_jev:
+        new_lines.append(f"\nJEV_AI_API_KEY={key}\nTYPESAFE_API_KEY={key}\n")
         
     with open(env_file, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
         
-    await reply_safe(update, context, "⚡ *Jev AI (TypeSafe) API Key Saved!* Ultra-fast System-1 decision routing is now active for your profile.")
+    await reply_safe(update, context, "⚡ *Jev AI Key Saved for Your Profile!* Ultra-fast System-1 decision routing is now active (connected to https://jev-ai.pro/api).")
 
 @auth_guard
 async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
