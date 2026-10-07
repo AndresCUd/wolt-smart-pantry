@@ -2,207 +2,186 @@
 
 [![Antigravity Skill](https://img.shields.io/badge/Antigravity-Skill-blue.svg)](https://github.com/)
 [![Playwright](https://img.shields.io/badge/Playwright-Chromium-green.svg)](https://playwright.dev/)
+[![Gemini](https://img.shields.io/badge/AI-Google%20Gemini-orange.svg)](https://aistudio.google.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An intelligent agentic grocery assistant and automation engine for **Wolt** (Tallinn, Estonia). It transforms kitchen inventory photos into a balanced, zero-waste 7-day meal plan and automatically assembles your shopping cart with exact quantities via Playwright.
+An intelligent agentic grocery assistant, meal planner, and browser automation engine for **Wolt** (Tallinn, Estonia). It transforms pantry & fridge photos into balanced 7-day culinary meal plans with thermal cooking shrinkage math, accommodates custom meal suggestions, and automates exact Wolt cart assembly via Playwright.
 
 ---
 
 ## 🌟 Key Capabilities
 
-1. 📸 **Visual Pantry & Fridge Audit**: Inspects photos of your fridge, freezer, and pantry to detect in-stock proteins, carbohydrates, and spices. Never repurchases items you already have.
-2. 🥩 **Nutritional Thermal Shrinkage Math**: Accounts for the standard 25–35% water/fat loss during cooking ($W_{\text{raw}} = \frac{W_{\text{cooked}}}{0.70}$), ensuring you buy adequate portions of genuine fresh meat (no cold cuts/mortadella).
-4. ✋ **2 User Confirmation Checkpoints**:
-   - **Pre-Cart Checkpoint**: Always presents the proposed 7-day meal plan and itemized grocery list for user approval, swaps, or dietary adjustments *before* touching the browser cart.
-   - **Post-Checkout Checkpoint**: Confirms whether you finalized the order on Wolt before saving new items to your persistent pantry memory state, preventing fake/ghost items.
-5. 🤖 **Robust Browser Automation**:
-   - Uses local persistent sessions (`.wolt_profile`) to bypass bot detection and OAuth friction.
-   - Adjusts item quantities accurately using product modal steppers (`+` buttons).
-   - Automatically handles address confirmation popups and dismisses "Continue previous order" prompts.
-   - Real-time cart price increment verification in euros.
-6. 🛡️ **Safe Checkout Guarantee**: The engine builds the cart and displays the final order summary in an open browser window. It **never** clicks payment or submits orders automatically.
+1. 📸 **Visual Pantry & Food Vision Audit**:
+   - Audits photos of your fridge, pantry shelves, or cooked meals using Gemini Multimodal Vision.
+   - Automatically logs consumed meals or restocks purchased groceries into virtual pantry memory.
+2. 🥩 **Nutritional Thermal Cooking Shrinkage Math**:
+   - Accounts for the standard 25–35% cooking shrinkage ($W_{\text{raw}} = \frac{W_{\text{cooked}}}{0.70}$), ensuring you purchase genuine meat cuts and fresh proteins (no cold cuts/mortadella).
+3. 🗓️ **Dynamic 7-Day Meal Planning with Custom Suggestions**:
+   - Generates gourmet, realistic 7-day plans (Monday–Sunday) following 4 freshness tiers (ultra-fresh $\rightarrow$ resilient produce $\rightarrow$ hearty proteins $\rightarrow$ fridge clearing).
+   - Supports personalized suggestions via `/plan [sugerencias]` or `/week [sugerencias]` (e.g. `/plan comida mexicana alta en proteína`, `/week platos italianos y más salmón`).
+4. 🧅 **Exact Product Matching & Substitute Approval**:
+   - Strictly enforces exact product title matching to avoid unintended replacements (e.g. green onions instead of yellow onions).
+   - If only partial substitutes are found, the bot pauses and asks for user approval (`[✅ Aceptar Sustituto(s)]` / `[❌ Descartar Sustituto(s)]`).
+5. 👥 **Multi-User Isolation & Private API Keys**:
+   - Each Telegram user has an isolated environment in `data/users/<user_id>/` (distinct Wolt browser profiles, pantry memory, dietary preferences, and meal plans).
+   - **Private API Keys**: Each user configures their own personal Gemini (`/setkey`) or Jev AI (`/setjev`) key. No shared global API keys.
+6. 🛡️ **Budget Protection & Checkout Safety**:
+   - Configurable budget ceiling (`/budget <amount>`). If the cart exceeds the limit, **Auto-Pay is automatically blocked** and left for manual review in your phone app.
+7. 🥧 **Raspberry Pi 5 Ready**:
+   - Full automated deployment suite (`scripts/deploy_pi.py`) running headless with systemd (`wolt-bot.service`) and Xvfb virtual display.
 
 ---
 
-## 🏗️ Architecture
+## 🏗️ Architecture & Domain Modularization
+
+The codebase is split into clean, modular domain packages under `wolt_core/`:
+
+```
+wolt-smart-pantry/
+├── wolt_core/                    # Modular domain core
+│   ├── config.py                 # Multi-user profile management & preferences
+│   ├── gemini.py                 # Gemini LLM, Multimodal Vision & NLU intent engine
+│   ├── pantry.py                 # Virtual pantry memory & stock deductions
+│   ├── planner.py                # 7-day meal planner, shrinkage math & candidates
+│   ├── browser.py                # Playwright Wolt browser automation & cart assembly
+│   └── __init__.py               # Core package exports
+├── wolt_manager.py               # Unified CLI runner & backwards-compatible bridge
+├── telegram_bot.py               # Multi-user Telegram bot bridge & callback handlers
+├── scripts/
+│   ├── deploy_pi.py              # Raspberry Pi 5 SSH deployment & systemd manager
+│   └── test_jev.py               # NLU intent routing verification script
+└── data/users/<user_id>/         # Isolated per-user state storage
+```
 
 ```mermaid
 flowchart TD
-    A["📸 1. Inventory Audit (Photos / Memory)"] --> B["🔍 2. Live Wolt Store Exploration\n(wolt_manager.py search / deals)"]
-    B --> C["📐 3. Nutritional Sizing & Freshness Matrix"]
-    C --> D["✋ Checkpoint 1: User Meal Plan Approval\n(User confirms or adjusts meals & items)"]
-    D -->|Approved| E["⚡ 4. Playwright Cart Assembly\n(wolt_manager.py add)"]
-    E --> F["👀 5. Open Order Review in Browser"]
-    F --> G["✋ Checkpoint 2: Purchase Confirmation\n(User completes order -> Update pantry_memory.json)"]
+    A["📸 Photo / Chat / Command\n(/plan, /week, /cart, /today)"] --> B["🧠 NLU & Intent Engine\n(Jev AI / Gemini Flash / Keywords)"]
+    B --> C["📦 Pantry Memory & Preferences\n(data/users/<id>/)"]
+    C --> D["🗓️ 7-Day Meal Plan & Shrinkage Math\n(Dynamic Chef with User Suggestions)"]
+    D --> E["🔍 Live Wolt Store Exploration\n(Deals, Exact Match, Substitute Check)"]
+    E --> F{"⚠️ Substitutes Detected?"}
+    F -->|Yes| G["✋ User Approval Checkpoint\n(Accept or Reject via Inline Buttons)"]
+    F -->|No| H["🛒 Playwright Cart Assembly\n(Headless / Xvfb Browser Session)"]
+    G -->|Approved| H
+    H --> I["🛡️ Budget Check & Summary\n(Open App Review / Optional Auto-Pay)"]
 ```
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Quick Start
 
 ### 1. Prerequisites
 - Python 3.10+
 - Git
+- Chromium (installed via Playwright)
 
-### 2. Installation
+### 2. Local Setup
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/wolt-smart-pantry.git
+git clone https://github.com/AndresCUd/wolt-smart-pantry.git
 cd wolt-smart-pantry
 
 # Create and activate virtual environment
 python -m venv .venv
-# On Windows (PowerShell):
+# Windows (PowerShell):
 .\.venv\Scripts\Activate.ps1
-# On Linux/macOS:
+# Linux/macOS:
 source .venv/bin/activate
 
-# Install dependencies and Chromium browser
+# Install dependencies and Playwright browser
 pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 3. One-Time Authentication Setup
+### 3. Telegram Bot Configuration
 
-Run the login helper to initialize your persistent session profile:
-
-```bash
-python wolt_manager.py login
-```
-
-- A browser window will open at `https://wolt.com/en/discovery`.
-- Log in to your Wolt account (via Google, Apple, or Email).
-- Confirm your default delivery address in Tallinn.
-- Close the browser window. Your session is now saved locally in `.wolt_profile/`.
-
----
-
-## 🛒 Usage
-
-### 1. Live Store Catalog Exploration & Offers Inspection
-
-Discover available products, exact packaging weights, and live prices before ordering:
-
-```bash
-# Search specific categories or items in the store:
-python wolt_manager.py search --store wolt-market-maakri --queries "hakkliha" "kanafilee" "banaan" "paprika" "rukola"
-
-# Scan store for active discounts and promotional deals:
-python wolt_manager.py deals --store wolt-market-maakri
-```
-
-### 2. Automated Cart Assembly & Autonomy Modes
-
-#### Supervised Mode (Standard):
-Builds the cart and leaves memory staging for your confirmation:
-```bash
-# Add custom items with explicit quantities (using 'Item:Qty' format):
-python wolt_manager.py add --store wolt-market-maakri --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
-
-# Pass calculated shopping list via JSON:
-python wolt_manager.py add --store wolt-market-maakri --json-items "[{\"query\": \"Banaan\", \"qty\": 6}, {\"query\": \"Riivjuust mozzarella\", \"qty\": 1}]"
-```
-
-#### Autonomous Cart Mode (`--auto` / `-y`):
-Bypasses manual meal checkpoints, builds cart, and updates memory, but **NEVER auto-charges payment**:
-```bash
-python wolt_manager.py add --store wolt-market-maakri --auto --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
-```
-
-#### Automated Payment Submission (`--auto-pay` - Explicit Opt-In Only):
-If and only if you explicitly want the agent to submit payment and complete checkout:
-```bash
-python wolt_manager.py add --store wolt-market-maakri --auto-pay --items "Banaan:6" "Rakvere homemade minced meat, 400g:2" "Rukola:1" "Paprika punane:2"
-```
-
-# Run sample demonstration grocery plan:
-python wolt_manager.py add --store wolt-market-maakri --sample
-
-### 3. Persistent Virtual Pantry Memory (No Photos Needed for Repeat Weeks)
-
-Track your active inventory across weekly orders so you don't need to re-photograph your pantry every week:
-
-```bash
-# View active tracked staples, fresh proteins, and purchase history:
-python wolt_manager.py pantry --action status
-
-# Manually record or update items in memory:
-python wolt_manager.py pantry --action record --items "Olive oil 1L:1" "Sibul 1kg:1"
-
-# Reset virtual memory state:
-python wolt_manager.py pantry --action clear
-```
-
----
-
-## 📱 Telegram Bot Setup (Order from your Phone)
-
-You can run `telegram_bot.py` on your computer to manage pantry inventory, upload fridge photos, generate meal plans, and trigger Wolt cart creation directly from Telegram on your phone.
-
-### 1. Configure Bot Token & Permissions
-1. Create a bot using [@BotFather](https://t.me/BotFather) on Telegram and copy the API Token.
-2. (Recommended) Get your Telegram User ID from [@userinfobot](https://t.me/userinfobot) to restrict bot access to only yourself.
-3. Copy `.env.example` to `.env` and fill in your details:
+1. Create a bot using [@BotFather](https://t.me/BotFather) on Telegram and copy the Bot Token.
+2. (Recommended) Get your Telegram User ID from [@userinfobot](https://t.me/userinfobot) to restrict access.
+3. Copy `.env.example` to `.env`:
    ```bash
    cp .env.example .env
    ```
+4. Fill in `.env`:
    ```env
    TELEGRAM_BOT_TOKEN=123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ
    TELEGRAM_ALLOWED_USERS=123456789
    DEFAULT_STORE=wolt-market-maakri
+   DEFAULT_CITY=tallinn
+   DEFAULT_COUNTRY=est
+   TIMEZONE=Europe/Tallinn
+   DAILY_MENU_TIME=09:00
    ```
 
-### 2. Start the Telegram Bot on your PC
+### 4. Run the Bot
 ```bash
 python telegram_bot.py
 ```
 
-### 3. Telegram Commands & Capabilities
-- 📸 **Send any photo** of your fridge/pantry $\rightarrow$ Bot audits stock, proposes a 7-day meal plan, and shows `[🛒 Build Cart]` inline buttons.
-- `/plan` $\rightarrow$ Generates meal plan & shopping list based on memory and live Wolt deals.
-- `/pantry` $\rightarrow$ Shows active long-term staples and purchase history.
-- `/deals` $\rightarrow$ Scans live discounts in Wolt Market Tallinn.
-- `/cart Banaan:6 Rukola:1` $\rightarrow$ Builds cart directly from phone.
-- **Inline Keyboard Buttons**:
-  - `[🛒 Build Cart on Wolt (Safe)]`: Opens cart on PC without charging payment.
-  - `[💳 Auto Pay & Order]`: Executes 1-click automated payment submission.
-  - `[💾 Confirm Order Placed]`: Syncs items into `pantry_memory.json`.
+---
+
+## 📱 Telegram Commands Guide
+
+| Command | Description |
+| :--- | :--- |
+| `/start` | Welcome guide, quick action menu, and system overview. |
+| `/today` (or `/menu`) | Today's scheduled meals, raw-to-cooked portions & freshness alerts. |
+| `/week [sugerencias]` | Full 7-day meal schedule. Pass suggestions to customize (e.g. `/week platos mexicanos`). |
+| `/plan [sugerencias]` | Audits pantry memory and generates a 7-day meal plan & Wolt cart with suggestions. |
+| `/setkey <api_key>` | Configure your private free Google Gemini API key ([AI Studio](https://aistudio.google.com)). |
+| `/setjev <api_key>` | Configure your private Jev AI key for sub-200ms decision routing ([Jev AI](https://jev-ai.pro)). |
+| `/pref` | Manage dietary profile, allergies (gluten, lactose, nuts), and household size. |
+| `/settings` | Configure 1-click Auto-Pay, maximum budget ceiling, and store venues. |
+| `/budget <amount>` | Set maximum shopping budget ceiling (e.g. `/budget 50` or `/budget 0` to disable). |
+| `/autopay [on\|off]` | Toggle automated payment submission. |
+| `/pantry` | Shows active tracked pantry staples, proteins, produce, and purchase history. |
+| `/stock` | Restock items manually (`/stock eggs 10`) or upload a photo with caption `/stock`. |
+| `/deals` | Scans Wolt Market for active promotional discounts. |
+| `/cart Item:Qty` | Adds specific items directly to your Wolt cart (e.g. `/cart Banaan:6 Rukola:1`). |
+| `/wolt` | Checks your user's isolated Wolt login session and venue. |
+| `/store <slug> [city]` | Change your preferred Wolt store venue. |
+| `/stop` | Abort active cart creation, scan, or proposal. |
+| `/logs [lines]` | View live execution logs directly from Telegram. |
 
 ---
 
-## 🧠 Installing as an Antigravity Agent Skill
+## 🥧 Raspberry Pi 5 Remote Deployment
 
-To use this with [Google Antigravity](https://github.com/google):
+The repository includes an SSH deployment CLI in [`scripts/deploy_pi.py`](file:///c:/Users/andre/Documents/antigravity/calm-hawking/scripts/deploy_pi.py):
 
-1. Copy the skill package to your Antigravity skills directory:
-   ```bash
-   # Global installation:
-   cp -r .agent/skills/wolt-smart-pantry ~/.gemini/config/skills/wolt-smart-pantry
-   ```
-2. In any Antigravity conversation, simply upload your fridge/pantry photos and ask:
-   > *"Plan my meals for the week and put the groceries in my Wolt cart."*
+```bash
+# 1. First-time setup on Raspberry Pi (installs system packages, Xvfb, Python venv, systemd service)
+python scripts/deploy_pi.py setup
 
-The agent will automatically read `SKILL.md`, calculate portions following `GROCERY_PLANNING_RULES.md`, and execute `wolt_manager.py`.
+# 2. Deploy latest code updates and restart bot service
+python scripts/deploy_pi.py deploy
 
----
+# 3. Check service status
+python scripts/deploy_pi.py status
 
-## 📁 Repository Structure
+# 4. View live logs from the Pi
+python scripts/deploy_pi.py logs -n 50
 
+# 5. Authorize Wolt session on the Pi via remote browser window
+python scripts/deploy_pi.py login
 ```
-├── .agent/
-│   └── skills/
-│       └── wolt-smart-pantry/
-│           ├── SKILL.md                   # Antigravity skill specification
-│           ├── references/
-│           │   └── GROCERY_PLANNING_RULES.md # Mathematical & culinary framework
-│           └── scripts/
-│               └── wolt_manager.py        # Playwright automation script
-├── GROCERY_PLANNING_RULES.md              # Project reference rules
-├── wolt_manager.py                        # Standalone CLI automation script
-├── requirements.txt                       # Minimal dependency manifest
-├── .gitignore                             # Ignores credentials, profiles, caches
-└── README.md                              # Documentation
+
+---
+
+## 💻 CLI Usage (Standalone)
+
+```bash
+# Search items in store
+python wolt_manager.py search --store wolt-market-maakri --queries "hakkliha" "banaan" "rukola"
+
+# Scan live discounts
+python wolt_manager.py deals --store wolt-market-maakri
+
+# Add custom items to cart
+python wolt_manager.py add --store wolt-market-maakri --items "Banaan:6" "Rukola:1" "Muna:10"
+
+# Check pantry memory status
+python wolt_manager.py pantry --action status
 ```
 
 ---
