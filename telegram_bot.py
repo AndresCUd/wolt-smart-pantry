@@ -981,28 +981,45 @@ async def store_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auth_guard
 async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends the last N lines of the bot log file to Telegram for easy debugging."""
-    lines_count = 25
+    """Sends clean, high-level execution activity status to Telegram without verbose internal details."""
+    lines_count = 15
     if context.args and context.args[0].isdigit():
-        lines_count = min(100, max(5, int(context.args[0])))
+        lines_count = min(50, max(5, int(context.args[0])))
 
     if not os.path.exists(LOG_FILE):
-        await reply_safe(update, context, "ℹ️ No log file found yet.")
+        await reply_safe(update, context, "ℹ️ No activity logged yet.")
         return
 
     try:
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
             all_lines = f.readlines()
-        tail = "".join(all_lines[-lines_count:])
-        if not tail.strip():
-            tail = "Log file is currently empty."
         
-        if len(tail) > 3800:
-            tail = tail[-3800:]
+        cleaned_entries = []
+        for line in reversed(all_lines):
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if "Traceback" in line_str or "File \"" in line_str:
+                continue
+            # Format clean timestamp and action message
+            if " [" in line_str and "] " in line_str:
+                parts = line_str.split("] ", 1)
+                time_part = line_str[:19]
+                msg_part = parts[1] if len(parts) > 1 else line_str
+                if ": " in msg_part:
+                    msg_part = msg_part.split(": ", 1)[-1]
+                cleaned_entries.append(f"• `{time_part}` {msg_part}")
+            else:
+                cleaned_entries.append(f"• {line_str}")
             
-        await reply_safe(update, context, f"📜 *Live Logs (Last {lines_count} lines):*\n```\n{tail}\n```")
+            if len(cleaned_entries) >= lines_count:
+                break
+
+        cleaned_entries.reverse()
+        status_body = "\n".join(cleaned_entries) if cleaned_entries else "System is running smoothly."
+        await reply_safe(update, context, f"📜 *Recent Activity Summary:*\n\n{status_body}")
     except Exception as e:
-        await reply_safe(update, context, f"⚠️ Error reading logs: {e}")
+        await reply_safe(update, context, f"⚠️ Error reading status: {e}")
 
 @auth_guard
 async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1830,7 +1847,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     intent = nlu_result.get("intent", "chef_chat")
     params = nlu_result.get("parameters", {})
     
-    logger.info(f"NLU result for user {user_id}: intent='{intent}', params={params}")
+    logger.info(f"Command processed for User {user_id}: {intent}")
 
     if intent == "stop":
         await stop_command(update, context)
