@@ -19,18 +19,110 @@ if sys.platform == "win32":
 
 from playwright.sync_api import sync_playwright
 
-# Persistent browser profile path (relative and portable)
+# Persistent browser profile & multi-user data paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data", "users")
 USER_DATA_DIR = os.path.join(BASE_DIR, ".wolt_profile")
 PANTRY_MEMORY_FILE = os.path.join(BASE_DIR, "pantry_memory.json")
 USER_PREFERENCES_FILE = os.path.join(BASE_DIR, "user_preferences.json")
 MEAL_PLAN_FILE = os.path.join(BASE_DIR, "meal_plan.json")
 
-def load_user_preferences():
-    """Loads persistent user dietary preferences, allergies, and food avoidances."""
-    if os.path.exists(USER_PREFERENCES_FILE):
+def get_user_dir(user_id=None) -> str:
+    """Returns the dedicated data directory for a specific Telegram user ID."""
+    if user_id:
+        u_dir = os.path.join(DATA_DIR, str(user_id))
+    else:
+        u_dir = BASE_DIR
+    os.makedirs(u_dir, exist_ok=True)
+    return u_dir
+
+def get_pantry_file(user_id=None) -> str:
+    if user_id:
+        p_file = os.path.join(get_user_dir(user_id), "pantry_memory.json")
+        if not os.path.exists(p_file) and os.path.exists(PANTRY_MEMORY_FILE):
+            try:
+                import shutil
+                shutil.copy2(PANTRY_MEMORY_FILE, p_file)
+            except Exception:
+                pass
+        return p_file
+    return PANTRY_MEMORY_FILE
+
+def get_meal_plan_file(user_id=None) -> str:
+    if user_id:
+        m_file = os.path.join(get_user_dir(user_id), "meal_plan.json")
+        if not os.path.exists(m_file) and os.path.exists(MEAL_PLAN_FILE):
+            try:
+                import shutil
+                shutil.copy2(MEAL_PLAN_FILE, m_file)
+            except Exception:
+                pass
+        return m_file
+    return MEAL_PLAN_FILE
+
+def get_user_preferences_file(user_id=None) -> str:
+    if user_id:
+        pref_file = os.path.join(get_user_dir(user_id), "user_preferences.json")
+        if not os.path.exists(pref_file) and os.path.exists(USER_PREFERENCES_FILE):
+            try:
+                import shutil
+                shutil.copy2(USER_PREFERENCES_FILE, pref_file)
+            except Exception:
+                pass
+        return pref_file
+    return USER_PREFERENCES_FILE
+
+def get_user_browser_dir(user_id=None) -> str:
+    """Returns the isolated Playwright browser profile directory for a specific user."""
+    if user_id:
+        b_dir = os.path.join(get_user_dir(user_id), ".wolt_profile")
+        if not os.path.exists(b_dir) and os.path.exists(USER_DATA_DIR):
+            try:
+                import shutil
+                shutil.copytree(USER_DATA_DIR, b_dir, dirs_exist_ok=True)
+            except Exception:
+                pass
+    else:
+        b_dir = USER_DATA_DIR
+    os.makedirs(b_dir, exist_ok=True)
+    return b_dir
+
+def get_user_config(user_id=None) -> dict:
+    """Loads user-specific configuration (custom store, city, custom Gemini API key)."""
+    if not user_id:
+        return {}
+    cfg_file = os.path.join(get_user_dir(user_id), "config.json")
+    if os.path.exists(cfg_file):
         try:
-            with open(USER_PREFERENCES_FILE, "r", encoding="utf-8") as f:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_user_config(cfg: dict, user_id=None):
+    if not user_id:
+        return
+    cfg_file = os.path.join(get_user_dir(user_id), "config.json")
+    with open(cfg_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+def list_active_users() -> list[int]:
+    """Lists all user IDs with initialized profiles in data/users/."""
+    if not os.path.exists(DATA_DIR):
+        return []
+    users = []
+    for d in os.listdir(DATA_DIR):
+        if d.isdigit():
+            users.append(int(d))
+    return users
+
+def load_user_preferences(user_id=None):
+    """Loads persistent user dietary preferences, allergies, and food avoidances."""
+    target_file = get_user_preferences_file(user_id)
+    if os.path.exists(target_file):
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
@@ -43,12 +135,13 @@ def load_user_preferences():
         "notes": ""
     }
 
-def save_user_preferences(prefs):
+def save_user_preferences(prefs, user_id=None):
     """Saves updated user dietary preferences and allergy profile to disk."""
     import json
-    with open(USER_PREFERENCES_FILE, "w", encoding="utf-8") as f:
+    target_file = get_user_preferences_file(user_id)
+    with open(target_file, "w", encoding="utf-8") as f:
         json.dump(prefs, f, indent=2, ensure_ascii=False)
-    print(f"[👤] User dietary preferences saved: {USER_PREFERENCES_FILE}")
+    print(f"[👤] User dietary preferences saved: {target_file}")
 
 def is_item_allowed(item_name: str, prefs=None) -> tuple[bool, str]:
     """Checks if an item violates any user allergies or food avoidance rules."""
@@ -94,11 +187,11 @@ def display_user_preferences():
     print("="*60 + "\n")
     return prefs
 
-def generate_weekly_meal_plan(inventory_items=None, prefs=None):
+def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None):
     """Generates an inventory-aligned, 7-day meal plan with breakfast, lunch, dinner, and snacks.
     Respects cooking thermal shrinkage (W_raw = W_cooked / 0.70), user allergies, and freshness tiers."""
     if prefs is None:
-        prefs = load_user_preferences()
+        prefs = load_user_preferences(user_id=user_id)
     
     diet = prefs.get("diet_type", "omnivore").lower()
     h_size = max(1, prefs.get("household_size", 1))
@@ -114,7 +207,7 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
             name = it[0] if isinstance(it, (tuple, list)) else (it.get("name") or it.get("query") if isinstance(it, dict) else str(it))
             known_items.append(name.lower())
     else:
-        pantry = load_pantry_memory()
+        pantry = load_pantry_memory(user_id=user_id)
         for p in pantry.get("proteins", []):
             known_items.append(p.get("name", "").lower())
         for pr in pantry.get("produce", []):
@@ -122,7 +215,7 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
         for s in pantry.get("staples", []):
             known_items.append(s.get("name", "").lower())
         if not known_items:
-            candidate = get_candidate_grocery_list(prefs)
+            candidate = get_candidate_grocery_list(prefs, user_id=user_id)
             for it in candidate:
                 known_items.append(it[0].lower())
 
@@ -329,36 +422,38 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None):
         "days": days_data
     }
 
-def generate_default_weekly_plan(prefs=None):
+def generate_default_weekly_plan(prefs=None, user_id=None):
     """Fallback alias for generating default weekly plan."""
-    return generate_weekly_meal_plan(inventory_items=None, prefs=prefs)
+    return generate_weekly_meal_plan(inventory_items=None, prefs=prefs, user_id=user_id)
 
-def load_meal_plan():
-    """Loads active weekly meal plan from disk or initializes plan."""
-    if os.path.exists(MEAL_PLAN_FILE):
+def load_meal_plan(user_id=None):
+    """Loads active weekly meal plan from disk or initializes plan for specific user."""
+    target_file = get_meal_plan_file(user_id)
+    if os.path.exists(target_file):
         try:
-            with open(MEAL_PLAN_FILE, "r", encoding="utf-8") as f:
+            with open(target_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
-    plan = generate_weekly_meal_plan()
-    save_meal_plan(plan)
+    plan = generate_weekly_meal_plan(user_id=user_id)
+    save_meal_plan(plan, user_id=user_id)
     return plan
 
-def save_meal_plan(plan):
-    """Saves updated weekly meal plan to disk."""
-    with open(MEAL_PLAN_FILE, "w", encoding="utf-8") as f:
+def save_meal_plan(plan, user_id=None):
+    """Saves updated weekly meal plan to disk for specific user."""
+    target_file = get_meal_plan_file(user_id)
+    with open(target_file, "w", encoding="utf-8") as f:
         json.dump(plan, f, indent=2, ensure_ascii=False)
-    print(f"[📋] Active meal plan saved: {MEAL_PLAN_FILE}")
+    print(f"[📋] Active meal plan saved: {target_file}")
 
-def get_day_menu_formatted(day_index=None):
+def get_day_menu_formatted(day_index=None, user_id=None):
     """Returns a rich formatted text message for a specific day's menu with Breakfast, Lunch, Dinner, Snack."""
-    plan = load_meal_plan()
+    plan = load_meal_plan(user_id=user_id)
     days = plan.get("days", [])
     if not days:
-        plan = generate_weekly_meal_plan()
+        plan = generate_weekly_meal_plan(user_id=user_id)
         days = plan.get("days", [])
-        save_meal_plan(plan)
+        save_meal_plan(plan, user_id=user_id)
         
     now = datetime.now()
     if day_index is None:
@@ -404,14 +499,14 @@ def get_day_menu_formatted(day_index=None):
     )
     return text, day_data
 
-def get_single_meal_formatted(meal_type="lunch", day_index=None):
+def get_single_meal_formatted(meal_type="lunch", day_index=None, user_id=None):
     """Returns a rich formatted text message focusing on a single meal with exact food breakdown and weights."""
-    plan = load_meal_plan()
+    plan = load_meal_plan(user_id=user_id)
     days = plan.get("days", [])
     if not days:
-        plan = generate_weekly_meal_plan()
+        plan = generate_weekly_meal_plan(user_id=user_id)
         days = plan.get("days", [])
-        save_meal_plan(plan)
+        save_meal_plan(plan, user_id=user_id)
         
     now = datetime.now()
     if day_index is None:
@@ -488,10 +583,10 @@ def get_single_meal_formatted(meal_type="lunch", day_index=None):
     )
     return text, meal
 
-def log_meal_consumption(meal_type="lunch", day_index=None):
+def log_meal_consumption(meal_type="lunch", day_index=None, user_id=None):
     """Records meal consumption, deducts used ingredients from virtual pantry memory,
     and returns a breakdown of food used and remaining inventory."""
-    plan = load_meal_plan()
+    plan = load_meal_plan(user_id=user_id)
     days = plan.get("days", [])
     now = datetime.now()
     if day_index is None:
@@ -503,7 +598,7 @@ def log_meal_consumption(meal_type="lunch", day_index=None):
     meal = day_data.get(meal_type, {})
     meal_title = meal.get("title", f"{meal_type.capitalize()}")
     
-    pantry = load_pantry_memory()
+    pantry = load_pantry_memory(user_id=user_id)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
     
     # Determine used food items
@@ -550,7 +645,7 @@ def log_meal_consumption(meal_type="lunch", day_index=None):
         "food_used": used_summary
     })
     
-    save_pantry_memory(pantry)
+    save_pantry_memory(pantry, user_id=user_id)
     
     text = (
         f"✅ *Meal Logged: {meal_type.upper()}*\n"
@@ -569,8 +664,11 @@ def log_meal_consumption(meal_type="lunch", day_index=None):
     text += f"\n📦 *Pantry Memory Updated:* View remaining items with `/pantry`."
     return text, used_summary
 
-def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = None, api_key: str = None) -> str:
+def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = None, api_key: str = None, user_id=None) -> str:
     """Generates an award-winning chef recipe using Gemini 3.8 Flash based on in-stock ingredients & preferences."""
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
@@ -578,7 +676,7 @@ def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = N
         load_dotenv(override=True)
         api_key = os.getenv("GEMINI_API_KEY", "")
     if prefs is None:
-        prefs = load_user_preferences()
+        prefs = load_user_preferences(user_id=user_id)
         
     ing_text = ", ".join(ingredients) if ingredients else "available in-stock pantry items"
     allergies = ", ".join(prefs.get("allergies", [])) or "None"
@@ -644,8 +742,11 @@ Format your response in clean GitHub Markdown for Telegram mobile chat:
         f"To unlock personalized dynamic recipes generated by Gemini 3.8 Flash, connect your free Gemini API key using `/setkey`!\n"
     )
 
-def analyze_photo_with_vision(image_path: str, api_key: str = None) -> dict:
+def analyze_photo_with_vision(image_path: str, api_key: str = None, user_id=None) -> dict:
     """Analyzes a food or kitchen photo using Gemini Multimodal Vision (gemini-3.8-flash) or intelligent fallback."""
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
     if not api_key:
         api_key = os.getenv("GEMINI_API_KEY", "")
     if not api_key:
@@ -764,9 +865,9 @@ Respond ONLY with a valid JSON object matching this schema:
         "chef_notes": "Detected 1 fried egg on toast, 1 extra toast slice, sliced avocado (~1/2 avocado), and crispy bacon."
     }
 
-def restock_pantry_from_detected_items(detected_items: list, source: str = "photo_stock", photo_path: str = None) -> tuple[str, list]:
+def restock_pantry_from_detected_items(detected_items: list, source: str = "photo_stock", photo_path: str = None, user_id=None) -> tuple[str, list]:
     """Adds all detected new grocery products to pantry memory, assuming they are NEW items not previously counted."""
-    pantry = load_pantry_memory()
+    pantry = load_pantry_memory(user_id=user_id)
     now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     
     added_summary = []
@@ -842,7 +943,7 @@ def restock_pantry_from_detected_items(detected_items: list, source: str = "phot
         "items": detected_items
     })
     
-    save_pantry_memory(pantry)
+    save_pantry_memory(pantry, user_id=user_id)
     
     summary_text = "\n".join(added_summary) if added_summary else "• (No items identified to restock)"
     text = (
@@ -854,10 +955,10 @@ def restock_pantry_from_detected_items(detected_items: list, source: str = "phot
     )
     return text, added_summary
 
-def deduct_custom_ingredients(detected_items, meal_type="breakfast", dish_title="Cooked Meal", photo_path=None):
+def deduct_custom_ingredients(detected_items, meal_type="breakfast", dish_title="Cooked Meal", photo_path=None, user_id=None):
     """Accurately deducts the exact ingredients detected from an uploaded photo or manual selection
     from the persistent pantry memory state and updates consumption history."""
-    pantry = load_pantry_memory()
+    pantry = load_pantry_memory(user_id=user_id)
     now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     
     used_summary = []
@@ -921,7 +1022,7 @@ def deduct_custom_ingredients(detected_items, meal_type="breakfast", dish_title=
         "photo_file": os.path.basename(photo_path) if photo_path else None
     })
     
-    save_pantry_memory(pantry)
+    save_pantry_memory(pantry, user_id=user_id)
     
     text = (
         f"✅ *Real Meal Logged & Deducted!*\n"
@@ -940,11 +1041,12 @@ def deduct_custom_ingredients(detected_items, meal_type="breakfast", dish_title=
     text += f"\n📦 *Virtual Pantry Updated:* View remaining stock with `/pantry`."
     return text, used_summary
 
-def load_pantry_memory():
-    """Loads virtual pantry memory state from disk or creates an initial structure."""
-    if os.path.exists(PANTRY_MEMORY_FILE):
+def load_pantry_memory(user_id=None):
+    """Loads virtual pantry memory state from disk for specific user or creates an initial structure."""
+    target_file = get_pantry_file(user_id)
+    if os.path.exists(target_file):
         try:
-            with open(PANTRY_MEMORY_FILE, "r", encoding="utf-8") as f:
+            with open(target_file, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
@@ -956,17 +1058,18 @@ def load_pantry_memory():
         "purchase_history": []
     }
 
-def save_pantry_memory(data):
-    """Saves updated pantry memory to JSON file."""
+def save_pantry_memory(data, user_id=None):
+    """Saves updated pantry memory to JSON file for specific user."""
     import json
+    target_file = get_pantry_file(user_id)
     data["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-    with open(PANTRY_MEMORY_FILE, "w", encoding="utf-8") as f:
+    with open(target_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
-    print(f"[💾] Pantry memory state saved: {PANTRY_MEMORY_FILE}")
+    print(f"[💾] Pantry memory state saved: {target_file}")
 
-def record_purchase_in_memory(items, store_slug="wolt-market-maakri"):
-    """Records a completed grocery order into the persistent pantry memory state."""
-    data = load_pantry_memory()
+def record_purchase_in_memory(items, store_slug="wolt-market-maakri", user_id=None):
+    """Records a completed grocery order into the persistent pantry memory state for specific user."""
+    data = load_pantry_memory(user_id=user_id)
     now_str = time.strftime("%Y-%m-%dT%H:%M:%S")
     
     parsed_items = []
@@ -1019,13 +1122,13 @@ def record_purchase_in_memory(items, store_slug="wolt-market-maakri"):
         "items": parsed_items
     })
     
-    save_pantry_memory(data)
+    save_pantry_memory(data, user_id=user_id)
 
-def display_pantry_memory():
-    """Outputs a human-readable and JSON summary of the virtual pantry state."""
-    data = load_pantry_memory()
+def display_pantry_memory(user_id=None):
+    """Outputs a human-readable and JSON summary of the virtual pantry state for specific user."""
+    data = load_pantry_memory(user_id=user_id)
     print("\n" + "="*60)
-    print("🏠 VIRTUAL PANTRY & INVENTORY MEMORY")
+    print(f"🏠 VIRTUAL PANTRY & INVENTORY MEMORY (User: {user_id or 'default'})")
     print(f"Last Updated: {data.get('last_updated', 'Unknown')}")
     print("="*60)
     
@@ -1056,11 +1159,12 @@ def display_pantry_memory():
     print("="*60 + "\n")
     return data
 
-def clear_pantry_memory():
-    """Resets the virtual pantry state."""
-    if os.path.exists(PANTRY_MEMORY_FILE):
-        os.remove(PANTRY_MEMORY_FILE)
-        print("[+] Pantry memory reset successfully.")
+def clear_pantry_memory(user_id=None):
+    """Resets the virtual pantry state for specific user."""
+    target_file = get_pantry_file(user_id)
+    if os.path.exists(target_file):
+        os.remove(target_file)
+        print(f"[+] Pantry memory reset successfully: {target_file}")
     else:
         print("[*] Pantry memory is already empty.")
 
@@ -1069,10 +1173,10 @@ DEFAULT_GROCERY_LIST = [
     ("Tallegg maisikattega", 1)
 ]
 
-def get_candidate_grocery_list(prefs=None):
+def get_candidate_grocery_list(prefs=None, user_id=None):
     """Generates a candidate shopping list tailored to user diet, allergies, household size, and breakfast needs."""
     if prefs is None:
-        prefs = load_user_preferences()
+        prefs = load_user_preferences(user_id=user_id)
         
     h_mult = max(1, prefs.get("household_size", 1))
     diet = prefs.get("diet_type", "omnivore").lower()
@@ -1149,13 +1253,14 @@ SAMPLE_WEEKLY_GROCERY_LIST = [
 
 MAX_ALLOWED_FAILURES = 3
 
-def login_mode():
-    """Opens a non-headless browser session to allow the user to authenticate once."""
-    print(f"[*] Launching persistent browser profile at: {USER_DATA_DIR}")
+def login_mode(user_id=None):
+    """Opens a non-headless browser session to allow the user to authenticate once for their profile."""
+    user_browser_dir = get_user_browser_dir(user_id)
+    print(f"[*] Launching persistent browser profile at: {user_browser_dir}")
     with sync_playwright() as p:
-        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"]
         context = p.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
+            user_data_dir=user_browser_dir,
             headless=False,
             args=args,
             viewport={"width": 1280, "height": 850}
@@ -1165,6 +1270,8 @@ def login_mode():
         
         print("\n" + "="*60)
         print(">>> ONE-TIME AUTHENTICATION SETUP:")
+        if user_id:
+            print(f">>> Telegram User Profile: {user_id}")
         print("1. Log in to your Wolt account in the opened browser window.")
         print("2. Confirm your default delivery address.")
         print("3. When finished, simply CLOSE the browser window.")
@@ -1180,6 +1287,43 @@ def login_mode():
             context.close()
         except Exception:
             pass
+
+def check_wolt_session(user_id=None, headless=None) -> dict:
+    """Checks if the user's Wolt browser profile is logged in and returns session status."""
+    user_browser_dir = get_user_browser_dir(user_id)
+    if headless is None:
+        headless = bool(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
+    status = {"logged_in": False, "user_id": user_id, "profile_dir": user_browser_dir}
+    with sync_playwright() as p:
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        try:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_browser_dir,
+                headless=headless,
+                args=args,
+                viewport={"width": 1280, "height": 850}
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto("https://wolt.com/en/discovery", wait_until="domcontentloaded", timeout=25000)
+            time.sleep(2.5)
+            
+            # Check for user profile or login button
+            login_btn = page.locator("button:has-text('Log in'), button:has-text('Logi sisse'), button[data-test-id*='login']").first
+            user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
+            
+            if user_menu.is_visible(timeout=1500):
+                status["logged_in"] = True
+            elif login_btn.is_visible(timeout=1500):
+                status["logged_in"] = False
+            else:
+                cookies = context.cookies()
+                has_auth = any("token" in c.get("name", "").lower() or "session" in c.get("name", "").lower() or "wolt" in c.get("name", "").lower() for c in cookies)
+                status["logged_in"] = has_auth
+                
+            context.close()
+        except Exception as e:
+            status["error"] = str(e)
+    return status
 
 def click_element_safely(loc):
     """Attempts to click a locator using progressive fallback strategies (standard, scroll, force, evaluate)."""
@@ -1443,16 +1587,23 @@ def search_and_add_item(page, query_text, target_qty=1):
     price_final = get_cart_total_price(page)
     return price_final > initial_cart_price or price_final > 0
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False):
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False, user_id=None, headless=None):
     """Executes the automated grocery shopping flow for the given items."""
+    user_browser_dir = get_user_browser_dir(user_id)
+    if headless is None:
+        headless = bool(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
+    if headless:
+        keep_open = False
+        
     print(f"\n[*] 🛒 Starting grocery order for venue: '{store_slug}' ({city}, {country})...")
+    print(f"[*] Telegram User Profile: {user_id or 'Default'} | Profile Dir: {user_browser_dir} | Headless: {headless}")
     print(f"[*] Total items to process: {len(items)}\n")
     
     with sync_playwright() as p:
-        args = ["--disable-blink-features=AutomationControlled"]
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         context = p.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
-            headless=False,
+            user_data_dir=user_browser_dir,
+            headless=headless,
             args=args,
             viewport={"width": 1280, "height": 850}
         )
@@ -1529,7 +1680,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         # Record purchased items into persistent pantry memory state if explicitly enabled
         if record_memory:
             try:
-                record_purchase_in_memory(items, store_slug=store_slug)
+                record_purchase_in_memory(items, store_slug=store_slug, user_id=user_id)
             except Exception as e:
                 print(f"[!] Warning: Could not record into pantry memory: {e}")
 
@@ -1568,7 +1719,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                     time.sleep(5.0)
                     print("[✅] Order submission completed successfully!")
                     try:
-                        record_purchase_in_memory(items, store_slug=store_slug)
+                        record_purchase_in_memory(items, store_slug=store_slug, user_id=user_id)
                     except Exception:
                         pass
                 else:
@@ -1594,8 +1745,12 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
             except Exception:
                 pass
 
-def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn", country="est", address=None, output_file=None):
+def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn", country="est", address=None, output_file=None, user_id=None, headless=None):
     """Explores the Wolt store venue in real time to discover active deals and verify available products, prices, and package sizes."""
+    user_browser_dir = get_user_browser_dir(user_id)
+    if headless is None:
+        headless = bool(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
+        
     print(f"\n[*] 🔍 Exploring Wolt store venue: '{store_slug}' ({city}, {country})...")
     
     results = {
@@ -1607,10 +1762,10 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
     }
     
     with sync_playwright() as p:
-        args = ["--disable-blink-features=AutomationControlled"]
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         context = p.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
-            headless=False,
+            user_data_dir=user_browser_dir,
+            headless=headless,
             args=args,
             viewport={"width": 1280, "height": 850}
         )
@@ -1752,7 +1907,8 @@ if __name__ == "__main__":
     import json
 
     parser = argparse.ArgumentParser(description="Wolt Smart Shopping Automation Assistant")
-    parser.add_argument("mode", choices=["login", "search", "deals", "add", "pantry", "preferences"], help="Mode: 'login', 'search', 'deals', 'add', 'pantry', 'preferences'")
+    parser.add_argument("mode", choices=["login", "check", "search", "deals", "add", "pantry", "preferences"], help="Mode: 'login', 'check', 'search', 'deals', 'add', 'pantry', 'preferences'")
+    parser.add_argument("--user", type=int, help="Telegram User ID for multi-user profile isolation")
     parser.add_argument("--action", choices=["status", "clear", "record"], default="status", help="Pantry action: 'status' (view inventory), 'clear' (reset), 'record' (save items)")
     parser.add_argument("--store", default="wolt-market-maakri", help="Wolt venue store slug")
     parser.add_argument("--city", default="tallinn", help="City name (default: tallinn)")
@@ -1766,6 +1922,7 @@ if __name__ == "__main__":
     parser.add_argument("--auto", "-y", action="store_true", help="Full autonomous cart mode (automatically record memory upon cart assembly, does NOT submit payment)")
     parser.add_argument("--auto-pay", action="store_true", help="EXPLICIT OPT-IN: Automatically submit checkout and payment on Wolt (requires explicit user specification)")
     parser.add_argument("--record-memory", action="store_true", help="Automatically record items to virtual pantry memory state upon cart creation")
+    parser.add_argument("--headless", action="store_true", help="Force headless browser execution")
     
     # User Preferences flags
     parser.add_argument("--diet", help="Set dietary type (omnivore, pescatarian, vegetarian, vegan, keto, high-protein)")
@@ -1775,11 +1932,15 @@ if __name__ == "__main__":
     parser.add_argument("--notes", help="Custom dietary notes (e.g. 'lactose-free milk only')")
     
     args = parser.parse_args()
+    user_id = args.user
     
     if args.mode == "login":
-        login_mode()
+        login_mode(user_id=user_id)
+    elif args.mode == "check":
+        res = check_wolt_session(user_id=user_id, headless=args.headless or None)
+        print(json.dumps(res, indent=2))
     elif args.mode == "preferences":
-        prefs = load_user_preferences()
+        prefs = load_user_preferences(user_id=user_id)
         changed = False
         if args.diet:
             prefs["diet_type"] = args.diet.strip().lower()
@@ -1798,13 +1959,13 @@ if __name__ == "__main__":
             changed = True
             
         if changed:
-            save_user_preferences(prefs)
-        display_user_preferences()
+            save_user_preferences(prefs, user_id=user_id)
+        display_user_preferences(user_id=user_id)
     elif args.mode == "pantry":
         if args.action == "status":
-            display_pantry_memory()
+            display_pantry_memory(user_id=user_id)
         elif args.action == "clear":
-            clear_pantry_memory()
+            clear_pantry_memory(user_id=user_id)
         elif args.action == "record":
             items_to_record = []
             if args.items:
@@ -1820,13 +1981,13 @@ if __name__ == "__main__":
                         items_to_record = json.load(f)
                 else:
                     items_to_record = json.loads(args.json_items)
-            record_purchase_in_memory(items_to_record, store_slug=args.store)
-            display_pantry_memory()
+            record_purchase_in_memory(items_to_record, store_slug=args.store, user_id=user_id)
+            display_pantry_memory(user_id=user_id)
     elif args.mode == "deals":
-        inspect_store_items(args.store, queries=args.queries, get_deals=True, city=args.city, country=args.country, address=args.address, output_file=args.output)
+        inspect_store_items(args.store, queries=args.queries, get_deals=True, city=args.city, country=args.country, address=args.address, output_file=args.output, user_id=user_id, headless=args.headless or None)
     elif args.mode == "search":
         search_queries = args.queries or ["hakkliha", "broilerifilee", "banaan", "paprika", "rukola"]
-        inspect_store_items(args.store, queries=search_queries, get_deals=False, city=args.city, country=args.country, address=args.address, output_file=args.output)
+        inspect_store_items(args.store, queries=search_queries, get_deals=False, city=args.city, country=args.country, address=args.address, output_file=args.output, user_id=user_id, headless=args.headless or None)
     elif args.mode == "add":
         items = []
         if args.json_items:
@@ -1856,5 +2017,5 @@ if __name__ == "__main__":
         else:
             items = DEFAULT_GROCERY_LIST
         
-        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=(args.record_memory or args.auto or args.auto_pay), auto_pay=args.auto_pay)
+        add_items_to_cart(args.store, items, city=args.city, country=args.country, address=args.address, record_memory=(args.record_memory or args.auto or args.auto_pay), auto_pay=args.auto_pay, user_id=user_id, headless=args.headless or None)
 

@@ -1,6 +1,7 @@
 """
 Wolt Smart Pantry - Telegram Bot Bridge
 Control your pantry memory, live store discovery, meal planning, and automated Wolt cart creation from your phone.
+Supports multiple users with isolated pantry memory, weekly plans, and separate persistent Wolt browser sessions.
 """
 
 import os
@@ -44,6 +45,11 @@ from wolt_manager import (
     is_item_allowed,
     inspect_store_items,
     add_items_to_cart,
+    check_wolt_session,
+    list_active_users,
+    get_user_config,
+    save_user_config,
+    get_user_browser_dir,
     load_meal_plan,
     save_meal_plan,
     get_day_menu_formatted,
@@ -92,6 +98,14 @@ DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 # Temporary in-memory session cache for pending shopping proposals and photo meals per user
 user_pending_plans = {}
 user_pending_photo_meal = {}
+
+def get_user_store_and_city(user_id: int):
+    """Retrieves the store venue, city, and country for a given user ID."""
+    cfg = get_user_config(user_id)
+    store = cfg.get("store") or DEFAULT_STORE
+    city = cfg.get("city") or DEFAULT_CITY
+    country = cfg.get("country") or DEFAULT_COUNTRY
+    return store, city, country
 
 def is_authorized(user_id: int) -> bool:
     """Checks if the given Telegram user ID is authorized."""
@@ -181,18 +195,23 @@ async def query_edit_safe(query, text: str, reply_markup=None, parse_mode="Markd
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message and interactive main menu."""
     user = update.effective_user
+    user_id = user.id if user else 0
+    store, city, _ = get_user_store_and_city(user_id)
     welcome_text = (
         f"👋 Hello {user.first_name if user else 'there'}!\n\n"
-        "🛒 *Wolt Smart Pantry Bot* is active on your PC.\n\n"
+        "🛒 *Wolt Smart Pantry Bot* is online.\n"
+        f"👤 *Your Profile ID:* `{user_id}`\n"
+        f"🏬 *Venue:* `{store}` ({city.capitalize()})\n\n"
         "Here is what you can do:\n"
-        "• 🌅 `/today` (or `/menu`) - Check today's meals, chef tips & freshness status\n"
+        "• 🌅 `/today` (or `/menu`) - Check today's meals, portions & chef tips\n"
         "• 📅 `/week` - Browse the full 7-day scheduled meal plan\n"
-        "• 📸 *Send a photo* of your fridge/pantry to audit stock\n"
+        "• 📸 *Send a photo* of a meal plate or groceries with `/stock`\n"
         "• `/plan` - Generate zero-waste 7-day meal plan & shopping list\n"
         "• `/pref` - Configure allergies, avoided foods & diet type\n"
         "• `/pantry` - View virtual pantry memory & long-term staples\n"
-        "• `/deals` - Explore live discounts in Wolt Market Tallinn\n"
+        "• `/deals` - Explore live discounts in your Wolt store\n"
         "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6 Rukola:1`)\n"
+        "• `/wolt` - Inspect your dedicated Wolt browser session\n"
         "• `/logs` - View recent system and automation logs\n"
         "• `/help` - View full usage guide & safety options\n\n"
         f"⏰ *Morning Schedule:* Daily menu arrives automatically at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone})."
@@ -211,7 +230,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("👤 Dietary & Allergies", callback_data="btn_pref")
         ],
         [
-            InlineKeyboardButton("🛒 Build Sample Cart", callback_data="btn_sample_cart")
+            InlineKeyboardButton("🛒 Build Sample Cart", callback_data="btn_sample_cart"),
+            InlineKeyboardButton("🛍️ Wolt Session", callback_data="btn_wolt_status")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -224,24 +244,29 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *Command Guide:*\n\n"
         "• `/today` (or `/menu`) - Today's breakfast/lunch/dinner, raw-to-cooked portions & freshness reminders.\n"
         "• `/week` - 7-day full weekly meal schedule (Monday to Sunday).\n"
-        "• `/plan` - Audits pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan with exact portions.\n"
+        "• `/plan` - Audits your pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan.\n"
         "• `/pref` - Manage your allergies, disliked ingredients, and household size.\n"
-        "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent purchase history.\n"
+        "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent stock.\n"
+        "• `/stock` - Restock items manually (`/stock eggs 10`) or upload a photo with caption `/stock`.\n"
         "• `/deals` - Scans Wolt Market for active promotional discounts.\n"
         "• `/cart Item:Qty Item:Qty` - Adds specific items directly (e.g. `/cart Banaan:6 Rukola:1`).\n"
-        "• `/logs [lines]` - View live execution logs on your PC (default 25 lines).\n"
-        "• `/clear_pantry` - Resets virtual pantry memory state.\n\n"
+        "• `/wolt` - Check your user's isolated Wolt session status.\n"
+        "• `/store <slug> [city]` - Set your preferred Wolt store venue.\n"
+        "• `/setkey <api_key>` - Set your private Gemini API key.\n"
+        "• `/logs [lines]` - View live execution logs (default 25 lines).\n"
+        "• `/clear_pantry` - Resets your virtual pantry memory.\n\n"
         f"⏰ *Automatic Morning Broadcast:* Every morning at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone}), your daily menu is delivered here automatically.\n\n"
-        "🛡️ *Safety Policy:*\n"
-        "By default, building a cart opens the review drawer on your PC and syncs to your phone app without auto-charging your card. Automated payment only occurs if you explicitly select *Auto Pay*."
+        "🛡️ *Multi-User Safety:*\n"
+        "Each user has their own isolated storage (`data/users/<id>/`), persistent pantry memory, and separate Wolt browser profile."
     )
     await reply_safe(update, context, help_text)
 
 @auth_guard
 async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates a gourmet step-by-step AI chef recipe using in-stock ingredients: /recipe [dish or ingredients]"""
+    user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
-    plan = load_meal_plan()
+    plan = load_meal_plan(user_id=user_id)
     days = plan.get("days", [])
     now = datetime.now()
     day_idx = min(6, max(0, now.weekday()))
@@ -272,14 +297,13 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dish_name = "Custom Chef Creation"
             ingredients = [a.strip() for a in " ".join(args).split(",") if a.strip()]
     else:
-        # Default to today's lunch or nearest meal
         meal = day_data.get("lunch", {})
         dish_name = meal.get("title", "Today's Lunch")
         ingredients = meal.get("ingredients", ["Chicken", "Rice", "Peppers"])
         
     msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a step-by-step gourmet recipe for:* `{dish_name}`...")
     
-    recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients)
+    recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients, None, None, user_id)
     
     keyboard = [
         [
@@ -293,14 +317,15 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     if msg:
-        await msg.edit_text(recipe_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await reply_safe(update, context, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's scheduled meal plan, chef tips, portions, and freshness status."""
-    text, day_data = get_day_menu_formatted()
+    user_id = update.effective_user.id if update.effective_user else 0
+    text, day_data = get_day_menu_formatted(user_id=user_id)
     keyboard = [
         [
             InlineKeyboardButton("🍳 Breakfast", callback_data="btn_view_breakfast"),
@@ -327,7 +352,8 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def breakfast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's breakfast with exact food quantities, weights, and chef tips."""
-    text, meal = get_single_meal_formatted("breakfast")
+    user_id = update.effective_user.id if update.effective_user else 0
+    text, meal = get_single_meal_formatted("breakfast", user_id=user_id)
     keyboard = [
         [
             InlineKeyboardButton("👨‍🍳 Full AI Cooking Recipe", callback_data="btn_recipe_breakfast"),
@@ -340,7 +366,8 @@ async def breakfast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's lunch with raw-to-cooked shrinkage math, exact ingredients & tips."""
-    text, meal = get_single_meal_formatted("lunch")
+    user_id = update.effective_user.id if update.effective_user else 0
+    text, meal = get_single_meal_formatted("lunch", user_id=user_id)
     keyboard = [
         [
             InlineKeyboardButton("👨‍🍳 Full AI Cooking Recipe", callback_data="btn_recipe_lunch"),
@@ -353,7 +380,8 @@ async def lunch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def dinner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's dinner with exact ingredients & chef tips."""
-    text, meal = get_single_meal_formatted("dinner")
+    user_id = update.effective_user.id if update.effective_user else 0
+    text, meal = get_single_meal_formatted("dinner", user_id=user_id)
     keyboard = [
         [
             InlineKeyboardButton("👨‍🍳 Full AI Cooking Recipe", callback_data="btn_recipe_dinner"),
@@ -366,7 +394,8 @@ async def dinner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def snack_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays today's snack with exact food breakdown."""
-    text, meal = get_single_meal_formatted("snack")
+    user_id = update.effective_user.id if update.effective_user else 0
+    text, meal = get_single_meal_formatted("snack", user_id=user_id)
     keyboard = [
         [InlineKeyboardButton("✅ Log Snack Eaten", callback_data="btn_eat_snack")],
         [InlineKeyboardButton("🌅 Full Day Menu", callback_data="btn_today_menu")]
@@ -376,11 +405,12 @@ async def snack_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def eat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Logs a meal as consumed, deducts items from pantry memory, and displays the food used."""
+    user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
     meal_type = args[0].lower() if args else "lunch"
     if meal_type not in ["breakfast", "lunch", "dinner", "snack"]:
         meal_type = "lunch"
-    text, used = log_meal_consumption(meal_type)
+    text, used = log_meal_consumption(meal_type, user_id=user_id)
     keyboard = [
         [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
         [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
@@ -390,7 +420,8 @@ async def eat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays the full 7-day meal plan breakdown."""
-    plan = load_meal_plan()
+    user_id = update.effective_user.id if update.effective_user else 0
+    plan = load_meal_plan(user_id=user_id)
     days = plan.get("days", [])
     h_size = plan.get("household_size", 1)
     
@@ -419,9 +450,8 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_safe(update, context, text, reply_markup=reply_markup)
 
 async def daily_morning_menu_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled task that runs every morning around 09:00 to deliver today's meal plan."""
+    """Scheduled task that runs every morning around 09:00 to deliver individualized meal plans to active users."""
     logger.info("🌅 Executing daily morning menu broadcast job...")
-    text, day_data = get_day_menu_formatted()
     keyboard = [
         [
             InlineKeyboardButton("🔄 Swap Today's Meal", callback_data="btn_swap_meal"),
@@ -434,28 +464,30 @@ async def daily_morning_menu_job(context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    recipients = ALLOWED_USERS if ALLOWED_USERS else []
-    if not recipients:
-        logger.warning("No ALLOWED_USERS configured for morning menu broadcast.")
+    active_users = set(list_active_users() + (ALLOWED_USERS if ALLOWED_USERS else []))
+    if not active_users:
+        logger.warning("No active users found for morning menu broadcast.")
         return
         
-    for user_id in recipients:
+    for user_id in active_users:
         try:
+            text, day_data = get_day_menu_formatted(user_id=user_id)
             await context.bot.send_message(
                 chat_id=user_id,
                 text=text,
                 parse_mode="Markdown",
                 reply_markup=reply_markup
             )
-            logger.info(f"Daily morning menu sent to Telegram user ID: {user_id}")
+            logger.info(f"Daily morning menu sent to user ID: {user_id}")
         except Exception as e:
             logger.error(f"Failed to send daily menu to user ID {user_id}: {e}")
 
 @auth_guard
 async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manages user dietary profile, allergies, and avoided ingredients."""
+    user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
-    prefs = load_user_preferences()
+    prefs = load_user_preferences(user_id=user_id)
 
     if args:
         subcmd = args[0].lower()
@@ -464,24 +496,24 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         if subcmd in ["allergy", "allergies"]:
             new_allergies = [a.strip() for a in val.split(",") if a.strip()]
             prefs["allergies"] = new_allergies
-            save_user_preferences(prefs)
+            save_user_preferences(prefs, user_id=user_id)
             await reply_safe(update, context, f"✅ *Allergies Updated:* {', '.join(new_allergies) if new_allergies else 'None'}")
             return
         elif subcmd in ["avoid", "avoided", "dislike", "dislikes"]:
             new_avoid = [a.strip() for a in val.split(",") if a.strip()]
             prefs["avoided_ingredients"] = new_avoid
-            save_user_preferences(prefs)
+            save_user_preferences(prefs, user_id=user_id)
             await reply_safe(update, context, f"✅ *Avoided Foods Updated:* {', '.join(new_avoid) if new_avoid else 'None'}")
             return
         elif subcmd == "diet":
             prefs["diet_type"] = val.strip().lower()
-            save_user_preferences(prefs)
+            save_user_preferences(prefs, user_id=user_id)
             await reply_safe(update, context, f"✅ *Diet Type Set To:* {val.strip().capitalize()}")
             return
         elif subcmd in ["people", "household", "size"]:
             if val.strip().isdigit():
                 prefs["household_size"] = max(1, int(val.strip()))
-                save_user_preferences(prefs)
+                save_user_preferences(prefs, user_id=user_id)
                 await reply_safe(update, context, f"✅ *Household Size Set To:* {prefs['household_size']} person(s)")
                 return
         elif subcmd in ["reset", "clear"]:
@@ -493,7 +525,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "household_size": 1,
                 "notes": ""
             }
-            save_user_preferences(prefs)
+            save_user_preferences(prefs, user_id=user_id)
             await reply_safe(update, context, "🔄 Dietary preferences reset to standard default.")
             return
 
@@ -521,12 +553,14 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 @auth_guard
 async def pantry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays virtual pantry memory status."""
-    data = load_pantry_memory()
+    user_id = update.effective_user.id if update.effective_user else 0
+    data = load_pantry_memory(user_id=user_id)
     staples = data.get("staples", [])
     proteins = data.get("proteins", [])
+    produce = data.get("produce", [])
     history = data.get("purchase_history", [])
 
-    text = "🏠 *Virtual Pantry Memory:*\n\n"
+    text = f"🏠 *Virtual Pantry Memory (User {user_id}):*\n\n"
     
     text += "📦 *Long-Term Staples (No Repurchase Needed):*\n"
     if staples:
@@ -542,6 +576,11 @@ async def pantry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         text += "• _None currently in stock._\n"
 
+    if produce:
+        text += "\n🥑 *Tracked Produce:*\n"
+        for pr in produce:
+            text += f"• `{pr['name']}` (Qty: {pr.get('qty', 1)})\n"
+
     text += f"\n📜 *Order History:* {len(history)} past orders recorded.\n"
     text += f"🕒 *Last Sync:* `{data.get('last_updated', 'N/A')}`"
 
@@ -553,52 +592,55 @@ async def pantry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auth_guard
 async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fetches live deals from the default Wolt venue."""
-    msg = await reply_safe(update, context, "🔍 Scanning live discounts on Wolt Market Tallinn...")
+    """Fetches live deals from the default or user-configured Wolt venue."""
+    user_id = update.effective_user.id if update.effective_user else 0
+    store, city, country = get_user_store_and_city(user_id)
+    msg = await reply_safe(update, context, f"🔍 Scanning live discounts on Wolt ({store})...")
     
     try:
         results = await asyncio.to_thread(
             inspect_store_items,
-            DEFAULT_STORE,
+            store,
             queries=None,
             get_deals=True,
-            city=DEFAULT_CITY,
-            country=DEFAULT_COUNTRY
+            city=city,
+            country=country,
+            user_id=user_id
         )
         deals = results.get("deals", [])
         if deals:
-            text = f"🔥 *Top Active Deals in {DEFAULT_STORE}:*\n\n"
+            text = f"🔥 *Top Active Deals in {store}:*\n\n"
             for d in deals[:10]:
                 orig = f" ~{d['original_price']}~" if d.get('original_price') else ""
                 text += f"• *{d['title']}*: `{d['price']}`{orig}\n"
             text += "\n_Use `/plan` to automatically incorporate deals into your meal plan._"
         else:
-            text = "ℹ️ No promotional deal badges detected on the main store page right now."
+            text = f"ℹ️ No promotional deal badges detected on {store} right now."
     except Exception as e:
         logger.error(f"Error scanning deals: {e}", exc_info=True)
         text = f"⚠️ Could not scan deals: {e}"
 
     if msg:
-        await msg.edit_text(text, parse_mode="Markdown")
+        await edit_safe(msg, text, parse_mode="Markdown")
     else:
         await reply_safe(update, context, text)
 
 @auth_guard
 async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates a weekly meal plan and itemized grocery list customized for user preferences."""
+    user_id = update.effective_user.id if update.effective_user else 0
     msg = await reply_safe(update, context, "📐 Calculating 7-day meal plan based on your dietary profile, allergies & Wolt catalog...")
     
-    user_id = update.effective_user.id if update.effective_user else 0
-    prefs = load_user_preferences()
+    prefs = load_user_preferences(user_id=user_id)
     household_multiplier = prefs.get("household_size", 1)
     diet = prefs.get("diet_type", "omnivore").lower()
 
     # Candidate shopping list tailored by diet, allergies, household size, and breakfast
-    filtered_items = get_candidate_grocery_list(prefs)
+    filtered_items = get_candidate_grocery_list(prefs, user_id=user_id)
 
     # Synchronize and save the meal plan for these exact items
-    new_plan = generate_weekly_meal_plan(inventory_items=filtered_items, prefs=prefs)
-    save_meal_plan(new_plan)
+    new_plan = generate_weekly_meal_plan(inventory_items=filtered_items, prefs=prefs, user_id=user_id)
+    save_meal_plan(new_plan, user_id=user_id)
     user_pending_plans[user_id] = filtered_items
 
     plan_text = (
@@ -624,13 +666,15 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     if msg:
-        await msg.edit_text(plan_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await edit_safe(msg, plan_text, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         await reply_safe(update, context, plan_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
 async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Direct cart assembly command: /cart Item:Qty Item:Qty"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    store, city, country = get_user_store_and_city(user_id)
     args = context.args if context.args else []
     if not args:
         await reply_safe(update, context, "Usage: `/cart Banaan:6 Rukola:1 Sibul:1`")
@@ -646,41 +690,94 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             items.append((it.strip(), 1))
 
-    msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items...")
+    msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
     
     try:
         await asyncio.to_thread(
             add_items_to_cart,
-            DEFAULT_STORE,
+            store,
             items,
-            city=DEFAULT_CITY,
-            country=DEFAULT_COUNTRY,
+            city=city,
+            country=country,
             keep_open=True,
             record_memory=False,
-            auto_pay=False
+            auto_pay=False,
+            user_id=user_id
         )
-        wolt_url = f"https://wolt.com/en/{DEFAULT_COUNTRY}/{DEFAULT_CITY}/venue/{DEFAULT_STORE}"
+        wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
         keyboard = [
             [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
             [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
         ]
-        user_pending_plans[update.effective_user.id] = items
+        user_pending_plans[user_id] = items
         success_text = (
             "🎉 *Cart Ready & Synchronized!*\n\n"
             "📲 *Wolt has synced your cart to your phone!* You can now open your **Wolt mobile app** on your phone to review your items and pay with Apple Pay / Google Pay in 1 tap.\n\n"
-            "_(Or complete checkout in your PC browser window)._\n\n"
             "👇 Once placed, tap below to sync your virtual pantry memory:"
         )
         if msg:
-            await msg.edit_text(success_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            await edit_safe(msg, success_text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await reply_safe(update, context, success_text, reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
         logger.error(f"Cart build failed: {e}", exc_info=True)
         if msg:
-            await msg.edit_text(f"⚠️ Cart build failed: {e}")
+            await edit_safe(msg, f"⚠️ Cart build failed: {e}")
         else:
             await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+
+@auth_guard
+async def wolt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inspects the user's isolated Wolt session and store settings: /wolt"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    store, city, country = get_user_store_and_city(user_id)
+    profile_dir = get_user_browser_dir(user_id)
+    wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+    
+    msg = await reply_safe(update, context, f"🔍 Inspecting Wolt session for User `{user_id}`...")
+    res = await asyncio.to_thread(check_wolt_session, user_id)
+    
+    logged_in = res.get("logged_in", False)
+    status_icon = "✅ Logged In / Active Session" if logged_in else "⚠️ No Active Login Detected"
+    
+    text = (
+        f"🛍️ *Wolt Profile Status (User ID: `{user_id}`)*\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"• *Status:* {status_icon}\n"
+        f"• *Venue:* `{store}` ({city.capitalize()}, {country.upper()})\n"
+        f"• *Browser Profile:* `{os.path.basename(profile_dir)}`\n\n"
+        "💡 *Tips:*\n"
+        "• Change store venue: `/store <store-slug> [city]`\n"
+        "• When cart is built, items automatically sync to your Wolt phone app!"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📱 Open Wolt Store Web", url=wolt_url)],
+        [InlineKeyboardButton("🛒 Test Sample Cart", callback_data="btn_sample_cart")]
+    ]
+    if msg:
+        await edit_safe(msg, text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
+async def store_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Configures user-specific Wolt store venue and city: /store <store-slug> [city]"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args if context.args else []
+    if not args:
+        store, city, country = get_user_store_and_city(user_id)
+        await reply_safe(update, context, f"🏬 *Your Current Wolt Store:* `{store}` in `{city}` ({country})\n\nTo change: `/store wolt-market-maakri tallinn`")
+        return
+        
+    new_store = args[0].strip()
+    new_city = args[1].strip().lower() if len(args) > 1 else DEFAULT_CITY
+    
+    cfg = get_user_config(user_id)
+    cfg["store"] = new_store
+    cfg["city"] = new_city
+    save_user_config(cfg, user_id=user_id)
+    
+    await reply_safe(update, context, f"✅ *Store Venue Updated:*\n• Store: `{new_store}`\n• City: `{new_city}`\n\nAll subsequent `/deals`, `/plan`, and `/cart` commands will use this venue.")
 
 @auth_guard
 async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -700,7 +797,6 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not tail.strip():
             tail = "Log file is currently empty."
         
-        # Telegram max message length is 4096 chars
         if len(tail) > 3800:
             tail = tail[-3800:]
             
@@ -711,16 +807,21 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @auth_guard
 async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Configures or updates GEMINI_API_KEY for vision AI recognition: /setkey <key>"""
+    user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
     if not args:
-        current_status = "Configured" if os.getenv("GEMINI_API_KEY") else "Not configured"
+        cfg = get_user_config(user_id)
+        current_status = "Configured for User" if cfg.get("gemini_api_key") else ("Configured Globally" if os.getenv("GEMINI_API_KEY") else "Not configured")
         await reply_safe(update, context, f"🔑 *Gemini API Key Status:* `{current_status}`\n\nTo configure, run:\n`/setkey AIzaSy...`\n\n_(Get a free key at https://aistudio.google.com)_")
         return
     
     key = args[0].strip()
+    cfg = get_user_config(user_id)
+    cfg["gemini_api_key"] = key
+    save_user_config(cfg, user_id=user_id)
     os.environ["GEMINI_API_KEY"] = key
     
-    # Save to .env file
+    # Save to .env file for global fallback
     env_file = os.path.join(BASE_DIR, ".env")
     lines = []
     if os.path.exists(env_file):
@@ -741,11 +842,12 @@ async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with open(env_file, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
         
-    await reply_safe(update, context, "✅ *Gemini API Key Saved!* Visual meal photo recognition & pantry photo audits are now 100% automated with Gemini 3.8 Flash.")
+    await reply_safe(update, context, "✅ *Gemini API Key Saved for Your Profile!* Visual meal photo recognition & pantry photo audits are active with Gemini 3.8 Flash.")
 
 @auth_guard
 async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adjusts specific stock levels or instructs how to restock via photo: /stock eggs 10"""
+    user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
     if not args:
         help_stock_msg = (
@@ -765,7 +867,7 @@ async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item_name = args[0].lower()
     qty_val = int(args[1]) if len(args) > 1 and args[1].isdigit() else 1
     
-    pantry = load_pantry_memory()
+    pantry = load_pantry_memory(user_id=user_id)
     matched = False
     
     # Check in proteins
@@ -798,14 +900,15 @@ async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "category": "manual_stock"
         })
         
-    save_pantry_memory(pantry)
-    await reply_safe(update, context, f"✅ *Stock Updated:* `{item_name.capitalize()}` is now set to **{qty_val}** in pantry memory.")
+    save_pantry_memory(pantry, user_id=user_id)
+    await reply_safe(update, context, f"✅ *Stock Updated:* `{item_name.capitalize()}` is now set to **{qty_val}** in your pantry memory.")
 
 @auth_guard
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles uploaded meal plates or grocery restock photos with vision AI analysis."""
     if not update.message or not update.message.photo:
         return
+    user_id = update.effective_user.id if update.effective_user else 0
     photo = update.message.photo[-1]
     caption = (update.message.caption or "").strip()
     is_stock_caption = "/stock" in caption.lower() or caption.lower().startswith("stock") or "restock" in caption.lower()
@@ -815,13 +918,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Save photo to local scratch directory
     os.makedirs("scratch", exist_ok=True)
     photo_file = await photo.get_file()
-    save_path = os.path.join("scratch", f"telegram_upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
+    save_path = os.path.join("scratch", f"telegram_upload_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
     await photo_file.download_to_drive(save_path)
-    logger.info(f"Saved uploaded photo to: {save_path}")
+    logger.info(f"Saved uploaded photo for user {user_id} to: {save_path}")
 
     # Analyze with Vision AI
-    res = await asyncio.to_thread(analyze_photo_with_vision, save_path)
-    user_id = update.effective_user.id if update.effective_user else 0
+    res = await asyncio.to_thread(analyze_photo_with_vision, save_path, None, user_id)
     user_pending_photo_meal[user_id] = {"path": save_path, "data": res}
     
     dish_title = res.get("dish_title", "Cooked Meal")
@@ -834,7 +936,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # If the user explicitly supplied /stock in caption or if detected as grocery restock:
     if is_stock_caption or photo_type == "groceries_restock":
-        restock_text, added_summary = restock_pantry_from_detected_items(items, source="photo_stock_caption", photo_path=save_path)
+        restock_text, added_summary = restock_pantry_from_detected_items(items, source="photo_stock_caption", photo_path=save_path, user_id=user_id)
         keyboard = [
             [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
             [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
@@ -908,7 +1010,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         logger.debug(f"query.answer() ignored timeout/error: {e}")
     data = query.data
     user_id = update.effective_user.id if update.effective_user else 0
-    wolt_url = f"https://wolt.com/en/{DEFAULT_COUNTRY}/{DEFAULT_CITY}/venue/{DEFAULT_STORE}"
+    store, city, country = get_user_store_and_city(user_id)
+    wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
 
     if data == "btn_plan":
         await plan_command(update, context)
@@ -918,6 +1021,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await pantry_command(update, context)
     elif data == "btn_pref":
         await preferences_command(update, context)
+    elif data == "btn_wolt_status":
+        await wolt_command(update, context)
     elif data == "btn_reset_pref":
         save_user_preferences({
             "diet_type": "omnivore",
@@ -926,25 +1031,26 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
             "household_size": 1,
             "notes": ""
-        })
+        }, user_id=user_id)
         await query_edit_safe(query, "🔄 Dietary preferences reset to standard default.")
     elif data == "btn_clear_pantry":
-        clear_pantry_memory()
+        clear_pantry_memory(user_id=user_id)
         await query_edit_safe(query, "🗑️ Virtual pantry memory has been reset.")
     elif data == "btn_sample_cart":
         items = SAMPLE_WEEKLY_GROCERY_LIST
         user_pending_plans[user_id] = items
-        await query_edit_safe(query, "🛒 Building sample grocery cart on your PC...")
+        await query_edit_safe(query, f"🛒 Building sample grocery cart on Wolt ({store})...")
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
-                DEFAULT_STORE,
+                store,
                 items,
-                city=DEFAULT_CITY,
-                country=DEFAULT_COUNTRY,
+                city=city,
+                country=country,
                 keep_open=True,
                 record_memory=False,
-                auto_pay=False
+                auto_pay=False,
+                user_id=user_id
             )
             keyboard = [
                 [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
@@ -961,17 +1067,18 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
     elif data == "btn_confirm_cart":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        await query_edit_safe(query, f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your PC browser or Wolt phone app.")
+        await query_edit_safe(query, f"🛒 *Building cart on Wolt ({len(items)} items)...*\nCheck your Wolt phone app or browser.")
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
-                DEFAULT_STORE,
+                store,
                 items,
-                city=DEFAULT_CITY,
-                country=DEFAULT_COUNTRY,
+                city=city,
+                country=country,
                 keep_open=True,
                 record_memory=False,
-                auto_pay=False
+                auto_pay=False,
+                user_id=user_id
             )
             keyboard = [
                 [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
@@ -979,8 +1086,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             ]
             sync_msg = (
                 "🎉 *Cart Ready & Synchronized!*\n\n"
-                "📲 *Wolt has synced your cart to your phone!* You can now simply open your **Wolt mobile app** on your phone to review your items and pay with Apple Pay / Google Pay / Card in 1 tap!\n\n"
-                "_(Or complete it on your PC browser screen)._\n\n"
+                "📲 *Wolt has synced your cart to your phone!* You can now simply open your **Wolt mobile app** on your phone to review your items and pay in 1 tap!\n\n"
                 "👇 Once placed, tap below to update your virtual pantry memory:"
             )
             await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -993,13 +1099,14 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         try:
             await asyncio.to_thread(
                 add_items_to_cart,
-                DEFAULT_STORE,
+                store,
                 items,
-                city=DEFAULT_CITY,
-                country=DEFAULT_COUNTRY,
+                city=city,
+                country=country,
                 keep_open=True,
                 record_memory=True,
-                auto_pay=True
+                auto_pay=True,
+                user_id=user_id
             )
             await query.message.reply_text("✅ *Order Successfully Placed & Paid on Wolt!*\nPantry memory has been automatically updated for next week.")
         except Exception as e:
@@ -1018,35 +1125,35 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data == "btn_view_snack":
         await snack_command(update, context)
     elif data == "btn_eat_breakfast":
-        text, _ = log_meal_consumption("breakfast")
+        text, _ = log_meal_consumption("breakfast", user_id=user_id)
         keyboard = [
             [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
         ]
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_eat_lunch":
-        text, _ = log_meal_consumption("lunch")
+        text, _ = log_meal_consumption("lunch", user_id=user_id)
         keyboard = [
             [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
         ]
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_eat_dinner":
-        text, _ = log_meal_consumption("dinner")
+        text, _ = log_meal_consumption("dinner", user_id=user_id)
         keyboard = [
             [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
         ]
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_eat_snack":
-        text, _ = log_meal_consumption("snack")
+        text, _ = log_meal_consumption("snack", user_id=user_id)
         keyboard = [
             [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
         ]
         await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_swap_meal":
-        plan = load_meal_plan()
+        plan = load_meal_plan(user_id=user_id)
         days = plan.get("days", [])
         now = datetime.now()
         day_idx = min(6, max(0, now.weekday()))
@@ -1061,22 +1168,22 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             alt = next((a for a in alternates if a["title"] != current_lunch), alternates[0])
             days[day_idx]["lunch"]["title"] = alt["title"]
             days[day_idx]["lunch"]["tip"] = alt["tip"]
-            save_meal_plan(plan)
+            save_meal_plan(plan, user_id=user_id)
             await query_edit_safe(query, f"🔄 *Meal Swapped for Today!*\n\n🥗 *New Lunch:* {alt['title']}\n💡 _{alt['tip']}_")
         else:
             await query_edit_safe(query, "🔄 Generated fresh meal plan variation.")
     elif data == "btn_record_last":
         items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
-        record_purchase_in_memory(items, store_slug=DEFAULT_STORE)
-        new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences())
-        save_meal_plan(new_plan)
-        await query_edit_safe(query, "💾 *Success!* Items have been recorded into your virtual pantry memory and your weekly meal plan is now 100% synchronized with your groceries!")
+        record_purchase_in_memory(items, store_slug=store, user_id=user_id)
+        new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences(user_id=user_id), user_id=user_id)
+        save_meal_plan(new_plan, user_id=user_id)
+        await query_edit_safe(query, "💾 *Success!* Items recorded into your virtual pantry memory and weekly meal plan is now 100% synchronized!")
     elif data == "btn_confirm_photo_restock":
         pending = user_pending_photo_meal.get(user_id)
         if pending:
             d = pending.get("data", {})
             items = d.get("detected_items", [])
-            text, _ = restock_pantry_from_detected_items(items, source="photo_button_restock", photo_path=pending.get("path"))
+            text, _ = restock_pantry_from_detected_items(items, source="photo_button_restock", photo_path=pending.get("path"), user_id=user_id)
             keyboard = [
                 [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
                 [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
@@ -1092,7 +1199,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 d.get("detected_items", []),
                 meal_type=d.get("meal_type", "breakfast"),
                 dish_title=d.get("dish_title", "Cooked Meal"),
-                photo_path=pending.get("path")
+                photo_path=pending.get("path"),
+                user_id=user_id
             )
             keyboard = [
                 [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
@@ -1111,7 +1219,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 d.get("detected_items", []),
                 meal_type=meal_type,
                 dish_title=d.get("dish_title", "Cooked Meal"),
-                photo_path=pending.get("path")
+                photo_path=pending.get("path"),
+                user_id=user_id
             )
             keyboard = [
                 [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
@@ -1119,7 +1228,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             ]
             await query.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         else:
-            text, _ = log_meal_consumption(meal_type)
+            text, _ = log_meal_consumption(meal_type, user_id=user_id)
             await query.message.reply_text(text, parse_mode="Markdown")
     elif data == "btn_recipe_photo":
         pending = user_pending_photo_meal.get(user_id, {})
@@ -1129,7 +1238,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         ingredients = [f"{it.get('qty', 1)} {it.get('name', 'Ingredient')}" for it in detected] if detected else ["Plate ingredients"]
         
         msg = await query.message.reply_text(f"👨‍🍳 *Chef AI is preparing a step-by-step recipe for:* `{dish_name}`...")
-        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients)
+        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients, None, None, user_id)
         keyboard = [
             [InlineKeyboardButton("✅ Deduct Exact Food Used", callback_data="btn_confirm_photo_deduct")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
@@ -1137,7 +1246,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
     elif data in ["btn_recipe_breakfast", "btn_recipe_lunch", "btn_recipe_dinner"]:
         meal_type = "breakfast" if data == "btn_recipe_breakfast" else ("lunch" if data == "btn_recipe_lunch" else "dinner")
-        plan = load_meal_plan()
+        plan = load_meal_plan(user_id=user_id)
         days = plan.get("days", [])
         now = datetime.now()
         day_idx = min(6, max(0, now.weekday()))
@@ -1146,7 +1255,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         dish_name = meal.get("title", f"{meal_type.capitalize()}")
         ingredients = meal.get("ingredients", [])
         msg = await query.message.reply_text(f"👨‍🍳 *Chef AI is preparing a step-by-step recipe for:* `{dish_name}`...")
-        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients)
+        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients, None, None, user_id)
         keyboard = [
             [InlineKeyboardButton(f"✅ Log {meal_type.capitalize()} Eaten", callback_data=f"btn_eat_{meal_type}")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
@@ -1160,7 +1269,6 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Logs uncaught exceptions and sends a helpful message to the user."""
     err_str = str(context.error) if context.error else ""
-    # Filter out harmless callback timeouts or unmodified messages
     if "Query is too old" in err_str or "Message is not modified" in err_str:
         logger.debug(f"Ignored minor Telegram update error: {err_str}")
         return
@@ -1198,6 +1306,8 @@ async def post_init(application):
         BotCommand("stock", "📦 Adjust ingredient stock (/stock eggs 10)"),
         BotCommand("deals", "🏷️ Scan live discount deals on Wolt"),
         BotCommand("cart", "🛒 Build Wolt cart directly (/cart Banaan:6)"),
+        BotCommand("wolt", "🛍️ Check isolated Wolt browser session"),
+        BotCommand("store", "🏬 Change Wolt store venue (/store wolt-market-maakri)"),
         BotCommand("setkey", "🔑 Configure Gemini API key for photo vision"),
         BotCommand("logs", "📜 View live system logs on PC (/logs 25)"),
         BotCommand("help", "📖 View complete command guide"),
@@ -1246,6 +1356,8 @@ def main():
     app.add_handler(CommandHandler("deals", deals_command))
     app.add_handler(CommandHandler("plan", plan_command))
     app.add_handler(CommandHandler("cart", cart_command))
+    app.add_handler(CommandHandler("wolt", wolt_command))
+    app.add_handler(CommandHandler("store", store_command))
     app.add_handler(CommandHandler("logs", logs_command))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(button_callback_handler))

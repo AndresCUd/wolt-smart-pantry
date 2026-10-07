@@ -11,7 +11,9 @@ ENV/
 *.env
 !.env.example
 
-# Personal Runtime State, Pantry Memory & Dietary Profiles (NEVER COMMIT)
+# Personal Runtime State, Multi-User Data & Dietary Profiles (NEVER COMMIT)
+data/
+data/*
 pantry_memory.json
 meal_plan.json
 user_preferences.json
