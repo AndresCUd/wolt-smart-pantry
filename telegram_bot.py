@@ -101,6 +101,7 @@ DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 
 # Temporary in-memory session cache for pending shopping proposals, photo meals, active tasks, and waiting prompt states
 user_pending_plans = {}
+user_pending_substitutions = {}
 user_pending_photo_meal = {}
 active_user_tasks = {}
 user_waiting_state = {}
@@ -196,6 +197,90 @@ async def query_edit_safe(query, text: str, reply_markup=None, parse_mode="Markd
                 except Exception:
                     pass
             return None
+
+def format_cart_result_message(res: dict, store: str, city: str, country: str, user_id: int):
+    """Formats the cart assembly result, including added items, budget alerts, and pending substitutes."""
+    final_p = res.get("final_price", 0.0)
+    budget_exceeded = res.get("budget_exceeded", False)
+    budget_limit = res.get("max_budget")
+    paid_ok = res.get("auto_pay_success", False)
+    pending_subs = res.get("pending_substitutions", [])
+    added = res.get("added_items", [])
+    wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+
+    # 1. Substitutions detected -> Ask user to accept or reject
+    if pending_subs:
+        user_pending_substitutions[user_id] = pending_subs
+        sub_lines = []
+        for s in pending_subs:
+            req = s.get("requested", "Item")
+            fnd = s.get("found_title", "Substitute")
+            pr = s.get("price", "")
+            rsn = s.get("reason", "Diferencia de producto")
+            pr_txt = f" ({pr})" if pr else ""
+            sub_lines.append(f"• *Solicitado:* `{req}`\n  ➔ *Encontrado:* `{fnd}`{pr_txt}\n  _{rsn}_")
+            
+        added_txt = f"\n\n✅ *Productos exactos agregados:* {len(added)}" if added else ""
+        
+        response_text = (
+            "⚠️ *Sustituto(s) Detectados para Aprobación:*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            + "\n\n".join(sub_lines) +
+            f"{added_txt}\n"
+            f"💶 *Total actual en carrito:* **{final_p:.2f} €**\n\n"
+            "❓ *¿Deseas agregar estos sustitutos a tu pedido en Wolt o descartarlos?*"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Aceptar Sustituto(s)", callback_data="btn_accept_substitutes"),
+                InlineKeyboardButton("❌ Descartar Sustituto(s)", callback_data="btn_skip_substitutes")
+            ],
+            [
+                InlineKeyboardButton("📱 Abrir Wolt Web / App", url=wolt_url)
+            ]
+        ]
+        return response_text, InlineKeyboardMarkup(keyboard)
+
+    # 2. Budget exceeded alert
+    if budget_exceeded:
+        response_text = (
+            "🚨 *Budget Safety Alert!*\n\n"
+            f"💶 *Cart Total:* **{final_p:.2f} €**\n"
+            f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
+            "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
+            "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
+        )
+        keyboard = [
+            [InlineKeyboardButton("📱 Open Wolt App", url=wolt_url)],
+            [InlineKeyboardButton("💾 Sync Pantry Memory", callback_data="btn_record_last")]
+        ]
+        return response_text, InlineKeyboardMarkup(keyboard)
+
+    # 3. Auto-pay success
+    if paid_ok:
+        response_text = (
+            "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
+            f"💶 *Total Paid:* **{final_p:.2f} €**\n"
+            "📦 Items recorded into your pantry memory for next week."
+        )
+        keyboard = [
+            [InlineKeyboardButton("📦 View Pantry Inventory", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        return response_text, InlineKeyboardMarkup(keyboard)
+
+    # 4. Standard cart ready & synchronized
+    response_text = (
+        "🎉 *Cart Ready & Synchronized!*\n\n"
+        f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
+        "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
+        "👇 Once placed, tap below to sync your virtual pantry memory:"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
+        [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
+    ]
+    return response_text, InlineKeyboardMarkup(keyboard)
 
 @auth_guard
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -854,7 +939,7 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     args = context.args if context.args else []
     if not args:
-        await reply_safe(update, context, "Usage: `/cart Banaan:6 Rukola:1 Sibul:1`")
+        await reply_safe(update, context, "Usage: `/cart Banaan:6 Rukola:1 Kollane sibul:1`")
         return
 
     items = []
@@ -882,42 +967,12 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_id=user_id,
             budget=budget_limit
         )
-        wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
-        final_p = res.get("final_price", 0.0)
-        budget_exceeded = res.get("budget_exceeded", False)
-        paid_ok = res.get("auto_pay_success", False)
-
-        keyboard = [
-            [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
-            [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
-        ]
         user_pending_plans[user_id] = items
-
-        if budget_exceeded:
-            response_text = (
-                "🚨 *Budget Safety Alert!*\n\n"
-                f"💶 *Cart Total:* **{final_p:.2f} €**\n"
-                f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
-                "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
-                "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
-            )
-        elif paid_ok:
-            response_text = (
-                "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
-                f"💶 *Total Paid:* **{final_p:.2f} €**\n"
-                "📦 Items recorded into your pantry memory for next week."
-            )
-        else:
-            response_text = (
-                "🎉 *Cart Ready & Synchronized!*\n\n"
-                f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
-                "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
-                "👇 Once placed, tap below to sync your virtual pantry memory:"
-            )
+        response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
         if msg:
-            await edit_safe(msg, response_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            await edit_safe(msg, response_text, reply_markup=reply_markup)
         else:
-            await reply_safe(update, context, response_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            await reply_safe(update, context, response_text, reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Cart build failed: {e}", exc_info=True)
         if msg:
@@ -1336,17 +1391,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 auto_pay=False,
                 user_id=user_id
             )
-            keyboard = [
-                [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
-                [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
-            ]
-            sync_msg = (
-                "🎉 *Sample Cart Ready & Synchronized!*\n\n"
-                f"💶 *Cart Total:* **{res.get('final_price', 0.0):.2f} €**\n\n"
-                "📲 *Open your Wolt mobile app on your phone* to view your live synchronized basket and pay with 1 tap.\n\n"
-                "👇 Once you place the order, tap below to sync your pantry memory:"
-            )
-            await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
+            await query.message.reply_text(response_text, parse_mode="Markdown", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error building sample cart: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
@@ -1371,53 +1417,52 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 user_id=user_id,
                 budget=budget_limit
             )
-            final_p = res.get("final_price", 0.0)
-            budget_exceeded = res.get("budget_exceeded", False)
-            paid_ok = res.get("auto_pay_success", False)
-
-            if budget_exceeded:
-                alert_text = (
-                    "🚨 *Budget Safety Alert — Payment Halted!*\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"💶 *Final Cart Total:* **{final_p:.2f} €**\n"
-                    f"🚫 *Your Configured Budget:* **{budget_limit:.2f} €**\n\n"
-                    "⚠️ Auto-Pay was **automatically blocked** to protect your wallet!\n\n"
-                    "📲 All items are safely held in your Wolt basket. Open your **Wolt phone app** to review items and complete payment manually."
-                )
-                keyboard = [
-                    [InlineKeyboardButton("📱 Open Wolt App", url=wolt_url)],
-                    [InlineKeyboardButton("💾 Sync Pantry Memory", callback_data="btn_record_last")]
-                ]
-                await query.message.reply_text(alert_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-            elif paid_ok:
-                success_text = (
-                    "🎉 *Order Placed & Paid on Wolt!*\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"💶 *Amount Charged:* **{final_p:.2f} €**\n"
-                    f"🏬 *Venue:* `{store}`\n\n"
-                    "📦 *Pantry memory has been automatically updated for next week!*"
-                )
-                keyboard = [
-                    [InlineKeyboardButton("📦 View Pantry Inventory", callback_data="btn_pantry")],
-                    [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
-                ]
-                await query.message.reply_text(success_text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-            else:
-                keyboard = [
-                    [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
-                    [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
-                ]
-                sync_msg = (
-                    "🎉 *Cart Ready & Synchronized!*\n"
-                    "━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
-                    "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review your items and pay with Apple Pay / Google Pay / Card in 1 tap!\n\n"
-                    "👇 Once placed, tap below to update your virtual pantry memory:"
-                )
-                await query.message.reply_text(sync_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
+            await query.message.reply_text(response_text, parse_mode="Markdown", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error executing cart flow: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
+    elif data == "btn_accept_substitutes":
+        subs = user_pending_substitutions.pop(user_id, [])
+        if not subs:
+            await query_edit_safe(query, "ℹ️ No hay sustitutos pendientes de confirmación.")
+        else:
+            await query_edit_safe(query, f"🛒 *Agregando {len(subs)} sustituto(s) aprobados al carrito de Wolt...*")
+            try:
+                sub_items = [(s.get("found_title", s.get("requested")), s.get("qty", 1)) for s in subs]
+                res = await asyncio.to_thread(
+                    add_items_to_cart,
+                    store,
+                    sub_items,
+                    city=city,
+                    country=country,
+                    keep_open=True,
+                    record_memory=False,
+                    auto_pay=False,
+                    user_id=user_id,
+                    allow_substitutes=True
+                )
+                final_p = res.get("final_price", 0.0)
+                wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+                confirm_msg = (
+                    "✅ *Sustituto(s) Agregados al Carrito de Wolt!*\n\n"
+                    f"💶 *Total actualizado del carrito:* **{final_p:.2f} €**\n\n"
+                    "📲 Abre tu **app de Wolt** en el teléfono para revisar tu pedido y pagar con 1 toque."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("📱 Abrir Wolt App / Web", url=wolt_url)],
+                    [InlineKeyboardButton("💾 Confirmar Pedido Realizado (Sincronizar)", callback_data="btn_record_last")]
+                ]
+                await query.message.reply_text(confirm_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+            except Exception as e:
+                logger.error(f"Error adding substitutes: {e}", exc_info=True)
+                await query.message.reply_text(f"⚠️ Error al agregar sustitutos: {e}")
+    elif data == "btn_skip_substitutes":
+        user_pending_substitutions.pop(user_id, None)
+        await query_edit_safe(
+            query,
+            "❌ *Sustituto(s) Descartados.*\n\nTu carrito en Wolt contiene únicamente los productos exactos confirmados."
+        )
     elif data == "btn_today_menu":
         await menu_command(update, context)
     elif data == "btn_week_plan":
@@ -1716,42 +1761,12 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     user_id=user_id,
                     budget=budget_limit
                 )
-                wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
-                final_p = res.get("final_price", 0.0)
-                budget_exceeded = res.get("budget_exceeded", False)
-                paid_ok = res.get("auto_pay_success", False)
-
-                keyboard = [
-                    [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
-                    [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
-                ]
                 user_pending_plans[user_id] = items
-
-                if budget_exceeded:
-                    resp_text = (
-                        "🚨 *Budget Safety Alert!*\n\n"
-                        f"💶 *Cart Total:* **{final_p:.2f} €**\n"
-                        f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
-                        "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
-                        "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
-                    )
-                elif paid_ok:
-                    resp_text = (
-                        "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
-                        f"💶 *Total Paid:* **{final_p:.2f} €**\n"
-                        "📦 Items recorded into your pantry memory for next week."
-                    )
-                else:
-                    resp_text = (
-                        "🎉 *Cart Ready & Synchronized!*\n\n"
-                        f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
-                        "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
-                        "👇 Once placed, tap below to sync your virtual pantry memory:"
-                    )
+                response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
                 if msg:
-                    await edit_safe(msg, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+                    await edit_safe(msg, response_text, reply_markup=reply_markup)
                 else:
-                    await reply_safe(update, context, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+                    await reply_safe(update, context, response_text, reply_markup=reply_markup)
             except Exception as e:
                 logger.error(f"Cart build failed: {e}", exc_info=True)
                 if msg:
@@ -1989,40 +2004,11 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     user_id=user_id,
                     budget=budget_limit
                 )
-                wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
-                final_p = res.get("final_price", 0.0)
-                budget_exceeded = res.get("budget_exceeded", False)
-                paid_ok = res.get("auto_pay_success", False)
-
-                keyboard = [
-                    [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)],
-                    [InlineKeyboardButton("💾 Confirm Order Placed (Sync Memory)", callback_data="btn_record_last")]
-                ]
-                if budget_exceeded:
-                    resp_text = (
-                        "🚨 *Budget Safety Alert!*\n\n"
-                        f"💶 *Cart Total:* **{final_p:.2f} €**\n"
-                        f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
-                        "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
-                        "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
-                    )
-                elif paid_ok:
-                    resp_text = (
-                        "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
-                        f"💶 *Total Paid:* **{final_p:.2f} €**\n"
-                        "📦 Items recorded into your pantry memory for next week."
-                    )
-                else:
-                    resp_text = (
-                        "🎉 *Cart Ready & Synchronized!*\n\n"
-                        f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
-                        "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
-                        "👇 Once placed, tap below to sync your virtual pantry memory:"
-                    )
+                response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
                 if msg:
-                    await edit_safe(msg, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+                    await edit_safe(msg, response_text, reply_markup=reply_markup)
                 else:
-                    await reply_safe(update, context, resp_text, reply_markup=InlineKeyboardMarkup(keyboard))
+                    await reply_safe(update, context, response_text, reply_markup=reply_markup)
             except Exception as e:
                 logger.error(f"Cart build failed: {e}", exc_info=True)
                 if msg:

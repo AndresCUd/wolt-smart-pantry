@@ -1487,7 +1487,7 @@ def get_candidate_grocery_list(prefs=None, user_id=None):
             ("Avokaado karbis 2tk, 300g", 1),
             ("Kirssploomtomat", 1),
             ("Rukola", 1),
-            ("Sibul 1kg", 1),
+            ("Kollane sibul 1kg", 1),
             ("Eesti Pagar Tosta", 1),
             ("Banaan", 6 * h_mult),
             ("Paprika punane", 2 * h_mult)
@@ -1501,7 +1501,7 @@ def get_candidate_grocery_list(prefs=None, user_id=None):
             ("Avokaado karbis 2tk, 300g", 1),
             ("Kirssploomtomat", 1),
             ("Rukola", 1),
-            ("Sibul 1kg", 1),
+            ("Kollane sibul 1kg", 1),
             ("Eesti Pagar Tosta", 1),
             ("Banaan", 6 * h_mult),
             ("Paprika punane", 2 * h_mult)
@@ -1516,7 +1516,7 @@ def get_candidate_grocery_list(prefs=None, user_id=None):
             ("Avokaado karbis 2tk, 300g", 1),
             ("Kirssploomtomat", 1),
             ("Rukola", 1),
-            ("Sibul 1kg", 1),
+            ("Kollane sibul 1kg", 1),
             ("Eesti Pagar Tosta", 1),
             ("Banaan", 6 * h_mult),
             ("Paprika punane", 2 * h_mult)
@@ -1539,7 +1539,7 @@ SAMPLE_WEEKLY_GROCERY_LIST = [
     ("Avokaado karbis", 1),              # 1x 2-pack ready-to-eat avocados
     ("Kirssploomtomat", 1),              # 1x cherry plum tomatoes punnet (250g-500g)
     ("Rukola", 1),                       # 1x fresh arugula / rocket pack (100g-125g)
-    ("Sibul 1kg", 1),                    # 1x 1kg mesh bag of yellow onions
+    ("Kollane sibul 1kg", 1),            # 1x 1kg mesh bag of yellow round onions (cebolla cabezona)
     ("Eesti Pagar Tosta", 1),            # 1x toast bread loaf (500g)
     ("Banaan", 6),                       # 6x loose bananas (~1.1kg weekly fruit)
     ("Paprika punane", 2)                # 2x fresh red bell peppers (~400g)
@@ -1770,8 +1770,95 @@ def get_store_search_input(page):
             continue
     return page.locator("main input").first
 
-def search_and_add_item(page, query_text, target_qty=1):
-    """Searches for an item, selects the exact target quantity in the product modal, and adds it to the cart."""
+def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "") -> tuple[bool, bool, str]:
+    """
+    Validates whether a found product card on Wolt is an exact match or a candidate substitute.
+    Returns: (is_exact_match: bool, is_candidate_substitute: bool, reason: str)
+    """
+    q = query_text.lower().strip()
+    t = (card_title + " " + card_raw_text).lower().strip()
+    
+    # Clean common measurement suffixes from query for semantic matching
+    clean_q = re.sub(r'\b\d+(?:[.,]\d+)?\s*(?:kg|g|tk|l|ml|karbis|pk|pack|tk)?\b', '', q).strip()
+    
+    # 1. Onions (Sibul / Cebolla)
+    is_yellow_onion_query = any(w in q for w in ["kollane sibul", "mugulsibul", "cebolla cabezona", "round onion", "yellow onion"]) or (clean_q in ["sibul", "sibula", "sibulat"])
+    is_green_onion_query = any(w in q for w in ["roheline sibul", "kevadsibul", "lehtsibul", "cebolla larga", "green onion", "spring onion", "scallion"])
+    is_red_onion_query = any(w in q for w in ["punane sibul", "red onion", "cebolla roja", "cebolla morada"])
+
+    if is_yellow_onion_query:
+        # Green / leaf onions must NOT match as exact
+        if any(w in t for w in ["roheline sibul", "kevadsibul", "lehtsibul", "porru", "lauk"]):
+            return False, True, "Sustituto detectado: Cebolla larga / verde en vez de cebolla cabezona"
+        # Red onions or shallots are candidate substitutes
+        if any(w in t for w in ["punane sibul", "salottsibul", "šalottsibul"]):
+            return False, True, "Sustituto detectado: Cebolla roja/chalota en vez de cebolla cabezona"
+        # Yellow / round / regular mesh bag onion is exact
+        if any(w in t for w in ["kollane", "mugul", "võrgus", "sibul"]):
+            return True, False, "Coincidencia exacta: Cebolla cabezona / Kollane sibul"
+        return False, True, "Posible sustituto de cebolla"
+
+    if is_green_onion_query:
+        if any(w in t for w in ["roheline sibul", "kevadsibul", "lehtsibul"]):
+            return True, False, "Coincidencia exacta: Cebolla larga / verde"
+        if "sibul" in t:
+            return False, True, "Sustituto detectado: Cebolla cabezona en vez de cebolla larga"
+            
+    if is_red_onion_query:
+        if "punane sibul" in t:
+            return True, False, "Coincidencia exacta: Cebolla roja"
+        if "sibul" in t:
+            return False, True, "Sustituto detectado: Cebolla regular en vez de cebolla roja"
+
+    # 2. Minced Meat (Hakkliha)
+    if any(w in q for w in ["veisehakkliha", "beef mince", "carne molida de res", "veise"]):
+        if any(bad in t for bad in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "maks", "pasteet"]):
+            return False, False, "Embutido o producto procesado descartado"
+        if "veise" in t or "veis" in t or "kodune" in t:
+            return True, False, "Coincidencia exacta: Carne molida de res/mixta"
+        if "seahakkliha" in t or "hakkliha" in t:
+            return False, True, "Sustituto detectado: Carne molida de cerdo en vez de res"
+
+    if "hakkliha" in q:
+        if any(bad in t for bad in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "maks", "pasteet"]):
+            return False, False, "Embutido descartado"
+        if "hakkliha" in t:
+            return True, False, "Coincidencia exacta: Carne molida"
+
+    # 3. Poultry (Kana / Broiler / Filee)
+    if any(w in q for w in ["broileri", "kanafilee", "rinnafilee", "chicken breast", "pechuga"]):
+        if any(bad in t for bad in ["tiivad", "tiib", "poolkoivad", "koib", "maks", "kintsuliha", "hakkliha", "viiner", "vorst"]):
+            return False, True, "Sustituto detectado: Corte diferente de pollo (alas/piernas/embutido)"
+        if any(good in t for good in ["filee", "rinnafilee", "kanafilee", "maisikattega"]):
+            return True, False, "Coincidencia exacta: Filete de pechuga de pollo"
+
+    # 4. Eggs (Munad / Kanamunad)
+    if any(w in q for w in ["muna", "munad", "egg"]):
+        if any(good in t for good in ["kanamunad", "muna", "munad", "vabapidamise"]):
+            return True, False, "Coincidencia exacta: Huevos"
+            
+    # 5. Bread / Toast (Tosta / Sai / Leib)
+    if any(w in q for w in ["tosta", "toast", "sai", "leib"]):
+        if any(good in t for good in ["tosta", "röstsai", "sai", "toast", "leib"]):
+            return True, False, "Coincidencia exacta: Pan tostado"
+
+    # 6. General Word Match
+    q_words = [w for w in re.findall(r'[a-zõäöü]+', clean_q) if len(w) > 2]
+    if q_words:
+        matches = [w for w in q_words if w in t]
+        if len(matches) == len(q_words):
+            return True, False, "Coincidencia exacta en todas las palabras clave"
+        elif len(matches) > 0:
+            return True, False, f"Coincidencia parcial: {', '.join(matches)}"
+            
+    # If title has at least some relevance
+    if any(w in t for w in q_words):
+        return False, True, f"Posible sustituto: '{card_title}'"
+
+    return False, False, f"Sin coincidencia para '{query_text}'"
+
+def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
+    """Searches for an item, verifies exact match vs substitute, and adds exact match to the cart."""
     initial_cart_price = get_cart_total_price(page)
     close_any_unwanted_modal(page)
     
@@ -1784,7 +1871,7 @@ def search_and_add_item(page, query_text, target_qty=1):
         store_search_input.press("Enter")
     except Exception as e:
         print(f"    -> ⚠️ Error typing into search box: {e}")
-        return False
+        return {"status": "error", "requested": query_text, "error": str(e)}
     
     # Wait for Wolt API and frontend to render filtered results
     time.sleep(2.5)
@@ -1804,8 +1891,13 @@ def search_and_add_item(page, query_text, target_qty=1):
         "a[href*='/items/']"
     ]
     
-    detected_card = None
-    card_title = ""
+    detected_exact_card = None
+    detected_sub_card = None
+    exact_title = ""
+    sub_title = ""
+    sub_price = ""
+    sub_reason = ""
+    exact_price = ""
 
     for selector in product_card_selectors:
         try:
@@ -1817,31 +1909,60 @@ def search_and_add_item(page, query_text, target_qty=1):
                     if any(bad in txt for bad in ["Discover", "W+ Weeks", "Deals", "Halloween", "Everyday Low Prices", "Fight Food Waste", "Categories"]):
                         continue
                     
-                    # Anti-cold-cut safety filter: reject sausages / mortadella when looking for fresh whole meats
-                    if any(m in query_text.lower() for m in ["hakkliha", "broileri", "veise", "sea"]):
-                        if any(bad_meat in txt.lower() for bad_meat in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "mortadella"]):
-                            continue
-
-                    detected_card = el
                     lines = [line.strip() for line in txt.split("\n") if line.strip() and "€" not in line]
                     card_title = lines[0] if lines else txt[:35]
-                    break
-            if detected_card:
+                    
+                    prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
+                    c_price = (prices[0][0] or prices[0][1]) + " €" if prices else ""
+                    
+                    is_exact, is_sub, match_reason = validate_item_match(query_text, card_title, txt)
+                    
+                    if is_exact and not detected_exact_card:
+                        detected_exact_card = el
+                        exact_title = card_title
+                        exact_price = c_price
+                        break
+                    elif is_sub and not detected_sub_card:
+                        detected_sub_card = el
+                        sub_title = card_title
+                        sub_price = c_price
+                        sub_reason = match_reason
+            if detected_exact_card:
                 break
         except Exception:
             continue
 
-    if not detected_card:
-        print(f"    -> ❌ [!] No matching product card found for '{query_text}'")
-        return False
+    card_to_add = detected_exact_card
+    chosen_title = exact_title
 
-    print(f"    -> 🥩 Found product: '{card_title}' (Target Quantity: {target_qty})")
+    if not card_to_add:
+        if detected_sub_card and not allow_substitute:
+            print(f"    -> ⚠️ [SUBSTITUTE DETECTED] Found '{sub_title}' ({sub_price}) for '{query_text}'. Reason: {sub_reason}")
+            print(f"    -> ⏸️ Halting addition until explicit user confirmation.")
+            return {
+                "status": "substitute_found",
+                "requested": query_text,
+                "found_title": sub_title,
+                "price": sub_price,
+                "qty": target_qty,
+                "reason": sub_reason
+            }
+        elif detected_sub_card and allow_substitute:
+            card_to_add = detected_sub_card
+            chosen_title = sub_title
+        else:
+            print(f"    -> ❌ [!] No matching product card found for '{query_text}'")
+            return {"status": "not_found", "requested": query_text, "qty": target_qty}
+
+    print(f"    -> 🥩 Found exact product: '{chosen_title}' (Target Quantity: {target_qty})")
 
     # 2. Open the product details modal to adjust exact quantity
-    if click_element_safely(detected_card) or click_element_safely(detected_card.locator("h3").first):
+    modal_opened = False
+    if click_element_safely(card_to_add) or click_element_safely(card_to_add.locator("h3").first):
         time.sleep(1.2)
         dialog = page.locator("dialog, [role='dialog']").first
         if dialog.is_visible(timeout=1500):
+            modal_opened = True
             # Increment quantity stepper inside the modal if target_qty > 1
             if target_qty > 1:
                 stepper_plus = dialog.locator(
@@ -1861,28 +1982,31 @@ def search_and_add_item(page, query_text, target_qty=1):
                 time.sleep(1.2)
                 price_now = get_cart_total_price(page)
                 if price_now > initial_cart_price or price_now > 0:
-                    return True
+                    return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
             else:
                 close_any_unwanted_modal(page)
 
     # 3. Fallback: Click '+' button directly on the card
-    plus_btn = detected_card.locator(
-        "button[data-test-id*='action-button'], button[data-test-id*='add'], button[aria-label*='Add'], button[aria-label*='Lisa'], button:has(svg), button"
-    ).first
-    if plus_btn.is_visible(timeout=800):
-        for _ in range(target_qty):
-            click_element_safely(plus_btn)
-            time.sleep(0.6)
-        time.sleep(1.0)
-        price_now = get_cart_total_price(page)
-        if price_now > initial_cart_price or price_now > 0:
-            return True
+    if not modal_opened:
+        plus_btn = card_to_add.locator(
+            "button[data-test-id*='action-button'], button[data-test-id*='add'], button[aria-label*='Add'], button[aria-label*='Lisa'], button:has(svg), button"
+        ).first
+        if plus_btn.is_visible(timeout=800):
+            for _ in range(target_qty):
+                click_element_safely(plus_btn)
+                time.sleep(0.6)
+            time.sleep(1.0)
+            price_now = get_cart_total_price(page)
+            if price_now > initial_cart_price or price_now > 0:
+                return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
 
     price_final = get_cart_total_price(page)
-    return price_final > initial_cart_price or price_final > 0
+    if price_final > initial_cart_price or price_final > 0:
+        return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
+    return {"status": "not_found", "requested": query_text, "qty": target_qty}
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None):
-    """Executes the automated grocery shopping flow for the given items with budget enforcement."""
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None, allow_substitutes=False):
+    """Executes the automated grocery shopping flow for the given items with budget enforcement and exact item matching."""
     user_browser_dir = get_user_browser_dir(user_id)
     if headless is None:
         headless = bool(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
@@ -1906,6 +2030,9 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
     budget_exceeded = False
     final_price = 0.0
     added_count = 0
+    added_items = []
+    pending_substitutions = []
+    failed_items = []
     set_user_abort(user_id, abort=False)
 
     with sync_playwright() as p:
@@ -1937,7 +2064,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                 item_name = item_data[0]
                 item_qty = item_data[1]
             elif isinstance(item_data, dict):
-                item_name = item_data.get("query")
+                item_name = item_data.get("query", item_data.get("name", item_data.get("found_title")))
                 item_qty = item_data.get("qty", 1)
             else:
                 item_name = str(item_data)
@@ -1948,26 +2075,29 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                 close_any_unwanted_modal(page, target_address=address)
                 prev_price = get_cart_total_price(page)
                 
-                item_added = search_and_add_item(page, item_name, target_qty=item_qty)
+                item_res = search_and_add_item(page, item_name, target_qty=item_qty, allow_substitute=allow_substitutes)
 
-                if item_added:
-                    time.sleep(1.2)
-                    new_price = get_cart_total_price(page)
-                    
-                    if new_price > prev_price:
-                        diff = new_price - prev_price
-                        print(f"    -> ✅ [OK] '{item_name}' (x{item_qty}) added! Cart total: {prev_price:.2f} € ➔ {new_price:.2f} € (+{diff:.2f} €)")
+                if isinstance(item_res, dict):
+                    st = item_res.get("status")
+                    if st == "added":
+                        time.sleep(1.2)
+                        new_price = get_cart_total_price(page)
+                        diff = new_price - prev_price if new_price > prev_price else 0.0
+                        print(f"    -> ✅ [OK] '{item_res.get('title')}' (x{item_qty}) added! Cart total: {prev_price:.2f} € ➔ {new_price:.2f} € (+{diff:.2f} €)")
                         current_cart_total = new_price
                         added_count += 1
-                    elif new_price > 0:
-                        print(f"    -> ✅ [OK] '{item_name}' (x{item_qty}) added (Cart total: {new_price:.2f} €)")
-                        current_cart_total = new_price
-                        added_count += 1
+                        added_items.append(item_res)
+                    elif st == "substitute_found":
+                        print(f"    -> ⚠️ [!] Substitute detected and held for confirmation: '{item_res.get('found_title')}'")
+                        pending_substitutions.append(item_res)
                     else:
-                        print(f"    -> ⚠️ [!] '{item_name}' marked as added, current total: {new_price:.2f} €")
-                        added_count += 1
+                        print(f"    -> ❌ [!] Could not add '{item_name}'")
+                        failed_items.append({"query": item_name, "qty": item_qty})
+                elif item_res:
+                    added_count += 1
+                    added_items.append({"title": item_name, "qty": item_qty})
                 else:
-                    print(f"    -> ❌ [!] Could not add '{item_name}'")
+                    failed_items.append({"query": item_name, "qty": item_qty})
 
                 # Clean search input
                 try:
@@ -1986,7 +2116,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         
         print("\n" + "="*60)
         final_price = get_cart_total_price(page)
-        print(f"🎉 Completed: {added_count}/{len(items)} items processed. Final Cart Total: {final_price:.2f} €")
+        print(f"🎉 Completed: {added_count}/{len(items)} items processed. (Pending substitutes: {len(pending_substitutions)}). Final Cart Total: {final_price:.2f} €")
         print("="*60)
         
         # Open order summary for review or automated checkout
@@ -1999,8 +2129,8 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         except Exception:
             pass
 
-        # Check budget limit before automated payment
-        if auto_pay:
+        # Check budget limit before automated payment (only auto-pay if NO pending substitutions)
+        if auto_pay and not pending_substitutions:
             if budget and final_price > budget:
                 budget_exceeded = True
                 print("\n" + "!"*60)
@@ -2070,6 +2200,9 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         "items_added": added_count,
         "total_items": len(items),
         "final_price": final_price,
+        "added_items": added_items,
+        "pending_substitutions": pending_substitutions,
+        "failed_items": failed_items,
         "auto_pay_attempted": auto_pay,
         "auto_pay_success": paid_successfully,
         "budget_exceeded": budget_exceeded,
