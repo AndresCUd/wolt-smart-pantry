@@ -17,16 +17,6 @@ from .config import get_user_config, load_user_preferences
 def call_gemini_api(prompt: str, api_key: str = None, model_name: str = "gemini-flash-lite-latest", json_mode: bool = False) -> str:
     """Universal Gemini API client with fallback across google-genai, google.generativeai, and direct REST endpoint."""
     if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(override=True)
-            api_key = os.getenv("GEMINI_API_KEY", "")
-        except Exception:
-            pass
-
-    if not api_key:
         return ""
 
     # Strategy 1: Official Google GenAI SDK (v1)
@@ -88,7 +78,7 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
     cfg = get_user_config(user_id) if user_id else {}
     
     # Stage 1: Fast System-1 Decision Layer via Jev AI (https://jev-ai.pro)
-    jev_key = cfg.get("jev_ai_api_key") or cfg.get("typesafe_api_key") or os.getenv("JEV_AI_API_KEY") or os.getenv("TYPESAFE_API_KEY") or os.getenv("OPENROUTER_API_KEY", "")
+    jev_key = cfg.get("jev_ai_api_key") or cfg.get("typesafe_api_key") if cfg else ""
     if jev_key:
         chosen = None
         try:
@@ -201,7 +191,7 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
             }
 
     # Stage 2: Deep Generative Parsing via Gemini
-    api_key = cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
+    api_key = cfg.get("gemini_api_key", "") if cfg else ""
     if api_key:
         prompt = f"""
 You are the natural language understanding brain for the Wolt Smart Pantry Telegram Bot.
@@ -336,12 +326,6 @@ def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = N
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        api_key = os.getenv("GEMINI_API_KEY", "")
     if prefs is None:
         prefs = load_user_preferences(user_id=user_id)
         
@@ -408,12 +392,6 @@ def analyze_photo_with_vision(image_path: str, api_key: str = None, user_id=None
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        api_key = os.getenv("GEMINI_API_KEY", "")
         
     if api_key:
         for model_name in ["gemini-flash-lite-latest", "gemini-flash-latest"]:
@@ -500,12 +478,6 @@ def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None,
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        api_key = os.getenv("GEMINI_API_KEY", "")
         
     if not api_key:
         return None
@@ -635,12 +607,6 @@ def generate_ai_meal_swap(meal_type="lunch", current_title="", in_stock_ingredie
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
-    if not api_key:
-        api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        from dotenv import load_dotenv
-        load_dotenv(override=True)
-        api_key = os.getenv("GEMINI_API_KEY", "")
         
     if prefs is None:
         prefs = load_user_preferences(user_id=user_id)

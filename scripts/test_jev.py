@@ -14,11 +14,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from wolt_manager import parse_natural_language_intent
 
 def test_jev(api_key=None):
+    user_id = "test_user"
     if api_key:
-        os.environ["JEV_AI_API_KEY"] = api_key
-        os.environ["TYPESAFE_API_KEY"] = api_key
+        from wolt_core.config import get_user_config, save_user_config
+        cfg = get_user_config(user_id)
+        cfg["jev_ai_api_key"] = api_key
+        cfg["typesafe_api_key"] = api_key
+        save_user_config(cfg, user_id=user_id)
     
-    key = os.getenv("JEV_AI_API_KEY") or os.getenv("TYPESAFE_API_KEY")
+    from wolt_core.config import get_user_config
+    key = get_user_config(user_id).get("jev_ai_api_key") if api_key else None
     print(f"[*] Testing Jev AI Integration...")
     print(f"[*] Target Endpoint: https://jev-ai.pro/api/v1/systemone")
     print(f"[*] Active Key: {'[Configured]' if key else '[Not set - testing fallback]'}\n")
@@ -34,7 +39,7 @@ def test_jev(api_key=None):
     ]
     
     for phrase in test_phrases:
-        res = parse_natural_language_intent(phrase)
+        res = parse_natural_language_intent(phrase, user_id=user_id)
         intent = res.get("intent", "ok")
         print(f"✓ \"{phrase}\" -> Done ({intent})")
     print("\n✅ All test requests completed successfully.")
