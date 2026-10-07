@@ -257,21 +257,18 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
             }
 
     # Stage 2: Deep Multimodal / Generative Parsing via Gemini 3.8 Flash
+    # Stage 2: Deep Multimodal / Generative Parsing via Gemini
     api_key = cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
     if api_key:
-        for model_name in ["gemini-3.8-flash", "gemini-3.5-flash-lite"]:
-            try:
-                from google import genai
-                client = genai.Client(api_key=api_key)
-                prompt = f"""
+        prompt = f"""
 You are the natural language understanding brain for the Wolt Smart Pantry Telegram Bot.
 Analyze this user message: "{user_text}"
 
 Classify into one of these intents:
 - "today_menu": Asking what is on the menu today, what to eat, breakfast, lunch, or dinner.
 - "recipe": Asking for a cooking recipe or culinary technique for a dish or ingredients.
-- "week_plan": Asking to browse the 7-day scheduled weekly meal plan.
-- "plan_week": Asking to generate a fresh 7-day meal plan or itemized grocery list.
+- "week_plan": Asking to browse the 7-day scheduled weekly meal plan (may contain custom suggestions or requests).
+- "plan_week": Asking to generate a fresh 7-day meal plan or itemized grocery list (may contain custom suggestions like 'mexican food', 'high protein', 'more salmon', 'no dairy').
 - "build_cart": Requesting to buy items or build a cart on Wolt.
 - "log_meal": Stating they ate a meal or specific food items (e.g. "I ate lunch", "ate 2 eggs").
 - "restock": Reporting groceries bought or adjusting inventory (e.g. "bought 10 eggs", "restock chicken").
@@ -291,6 +288,7 @@ Respond ONLY with a valid JSON object matching this schema:
   "parameters": {{
     "dish_or_ingredients": "<string or null>",
     "meal_type": "breakfast" | "lunch" | "dinner" | "snack" | null,
+    "user_suggestions": "<specific user meal suggestions/requests or null>",
     "items": [{{"name": "<string>", "qty": <int>}}],
     "budget_amount": <float or null>,
     "autopay_value": <true | false | null>,
@@ -304,14 +302,13 @@ Respond ONLY with a valid JSON object matching this schema:
   "chef_reply": "<friendly concise 1-2 sentence response if chef_chat>"
 }}
 """
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt
-                )
-                txt = response.text if hasattr(response, "text") else str(response)
-                clean_txt = re.sub(r"^```(?:json)?\s*", "", txt.strip(), flags=re.MULTILINE)
-                clean_txt = re.sub(r"\s*```$", "", clean_txt.strip(), flags=re.MULTILINE)
-                return json.loads(clean_txt)
+        for model_name in ["gemini-flash-lite-latest", "gemini-flash-latest"]:
+            try:
+                resp_text = call_gemini_api(prompt, api_key=api_key, model_name=model_name, json_mode=True)
+                if resp_text and resp_text.strip():
+                    clean_txt = re.sub(r"^```(?:json)?\s*", "", resp_text.strip(), flags=re.MULTILINE)
+                    clean_txt = re.sub(r"\s*```$", "", clean_txt.strip(), flags=re.MULTILINE)
+                    return json.loads(clean_txt)
             except Exception as e:
                 print(f"[!] NLU intent error with {model_name}: {e}")
 
@@ -340,30 +337,33 @@ Respond ONLY with a valid JSON object matching this schema:
         return {"intent": "recipe", "parameters": {"dish_or_ingredients": user_text}}
         
     # 5. Today / Menu
-    if any(w in low for w in ["today", "menu", "lunch", "dinner", "breakfast", "snack", "what to eat", "what am i eating"]):
+    if any(w in low for w in ["today", "menu", "lunch", "dinner", "breakfast", "snack", "what to eat", "what am i eating", "hoy", "desayuno", "almuerzo", "cena"]):
         meal_type = "lunch"
-        if "breakfast" in low: meal_type = "breakfast"
-        elif "dinner" in low: meal_type = "dinner"
-        elif "snack" in low: meal_type = "snack"
+        if "breakfast" in low or "desayuno" in low: meal_type = "breakfast"
+        elif "dinner" in low or "cena" in low: meal_type = "dinner"
+        elif "snack" in low or "merienda" in low: meal_type = "snack"
         return {"intent": "today_menu", "parameters": {"meal_type": meal_type}}
         
-    # 6. Week Plan
-    if any(w in low for w in ["week", "schedule", "7 day", "calendar"]):
-        return {"intent": "week_plan", "parameters": {}}
-        
-    # 7. Generate Plan
-    if any(w in low for w in ["plan", "generate plan", "new plan", "shopping list", "groceries plan"]):
-        return {"intent": "plan_week", "parameters": {}}
+    # 6. Week Plan / Generate Plan with suggestions
+    if any(w in low for w in ["plan", "semana", "week", "schedule", "7 day", "calendar", "shopping list", "groceries plan"]):
+        # Extract potential suggestion text
+        sug_text = user_text
+        for kw in ["planifica", "plan", "semana", "week", "menu de la semana", "generate plan", "crea un plan"]:
+            if kw in low:
+                idx = low.find(kw)
+                sug_text = user_text[idx + len(kw):].strip(" :-–—,/.")
+                break
+        return {"intent": "plan_week", "parameters": {"user_suggestions": sug_text if len(sug_text) > 3 else None, "query": user_text}}
         
     # 8. Build Cart
-    if any(w in low for w in ["buy", "order", "cart", "add to basket", "wolt cart", "assemble cart"]):
+    if any(w in low for w in ["buy", "order", "cart", "add to basket", "wolt cart", "assemble cart", "compra", "carrito"]):
         return {"intent": "build_cart", "parameters": {"query": user_text}}
         
     # 9. Eat / Log meal
-    if any(w in low for w in ["ate", "eaten", "consume", "finished eating", "had lunch", "had breakfast", "had dinner"]):
+    if any(w in low for w in ["ate", "eaten", "consume", "finished eating", "had lunch", "had breakfast", "had dinner", "comi", "comí", "almorcé"]):
         meal_type = "lunch"
-        if "breakfast" in low: meal_type = "breakfast"
-        elif "dinner" in low: meal_type = "dinner"
+        if "breakfast" in low or "desayuno" in low: meal_type = "breakfast"
+        elif "dinner" in low or "cena" in low: meal_type = "dinner"
         elif "snack" in low: meal_type = "snack"
         return {"intent": "log_meal", "parameters": {"meal_type": meal_type}}
         
@@ -372,21 +372,21 @@ Respond ONLY with a valid JSON object matching this schema:
         return {"intent": "restock", "parameters": {"query": user_text}}
         
     # 11. Pantry / Fridge
-    if any(w in low for w in ["pantry", "fridge", "freezer", "stock", "what do i have", "inventory"]):
+    if any(w in low for w in ["pantry", "fridge", "freezer", "stock", "what do i have", "inventory", "despensa", "nevera"]):
         return {"intent": "pantry_status", "parameters": {}}
         
     # 12. Deals
-    if any(w in low for w in ["deal", "discount", "sale", "offer", "cheap", "promo"]):
+    if any(w in low for w in ["deal", "discount", "sale", "offer", "cheap", "promo", "ofertas", "descuentos"]):
         return {"intent": "deals", "parameters": {}}
         
     # 13. Preferences / Allergies
-    if any(w in low for w in ["allergy", "allergic", "avoid", "dislike", "diet", "vegan", "vegetarian", "keto"]):
+    if any(w in low for w in ["allergy", "allergic", "avoid", "dislike", "diet", "vegan", "vegetarian", "keto", "alergia"]):
         return {"intent": "preferences", "parameters": {"query": user_text}}
         
     return {
         "intent": "chef_chat",
         "parameters": {},
-        "chef_reply": "I'm your Wolt Smart Pantry Chef! I can plan your meals, manage your fridge inventory, check live store deals, and build your Wolt carts automatically. Tell me what you'd like to do!"
+        "chef_reply": "I'm your Wolt Smart Pantry Chef! I can plan your meals, incorporate your custom meal suggestions, manage your fridge inventory, check live store deals, and build your Wolt carts automatically. Tell me what you'd like to do!"
     }
 
 def load_user_preferences(user_id=None):
@@ -510,8 +510,8 @@ def call_gemini_api(prompt: str, api_key: str, model_name: str = "gemini-2.0-fla
 
     return ""
 
-def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None) -> dict:
-    """Generates a fully dynamic 7-day culinary meal plan using Gemini 3.8 Flash based on in-stock ingredients & preferences."""
+def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None, user_suggestions: str = None) -> dict:
+    """Generates a fully dynamic 7-day culinary meal plan using Gemini based on in-stock ingredients, preferences, and user suggestions."""
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
@@ -556,6 +556,14 @@ def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None,
 
     items_str = ", ".join(known_items) if known_items else "Standard fresh groceries"
 
+    suggestion_block = ""
+    if user_suggestions and user_suggestions.strip():
+        suggestion_block = f"""
+User Special Guidance & Suggestions for this Week:
+"{user_suggestions.strip()}"
+* IMPORTANT: Seamlessly incorporate the requested theme, cuisine, dishes, or specific ingredient focus into the 7-day schedule while maintaining strict freshness tiers, portion shrinkage math, and allergy safety.
+"""
+
     prompt = f"""
 You are an executive private chef and certified nutritionist.
 Create an innovative, gourmet, and realistic 7-Day Meal Plan (Monday to Sunday) for {h_size} person(s).
@@ -565,7 +573,7 @@ Dietary Profile: {diet}.
 Allergies (STRICTLY AVOID): {allergies}.
 Disliked/Avoided ingredients: {avoided}.
 Protein Target: ~{raw_p_g}g raw per meal (yields ~{cooked_p_g}g cooked per person accounting for 30% thermal cooking shrinkage).
-
+{suggestion_block}
 Freshness Schedule Rules:
 - Monday & Tuesday (Tier 1: Ultra-Fresh): Prioritize delicate leafy greens (arugula/spinach), fresh raw minced meats / fish, and ripe avocados.
 - Wednesday & Thursday (Tier 2: Resilient Produce & Poultry): Chicken breast fillets, bell peppers, broccoli, carrots, and eggs.
@@ -626,6 +634,8 @@ Respond ONLY with a valid JSON object matching this schema:
                 plan_data = json.loads(clean_json)
                 if plan_data.get("days") and len(plan_data["days"]) >= 7:
                     plan_data["last_generated"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                    if user_suggestions and user_suggestions.strip():
+                        plan_data["user_suggestions"] = user_suggestions.strip()
                     print(f"[✨] Dynamic 7-day meal plan generated by Gemini ({model_name})!")
                     return plan_data
         except Exception as e:
@@ -634,7 +644,7 @@ Respond ONLY with a valid JSON object matching this schema:
     return None
 
 def generate_ai_meal_swap(meal_type="lunch", current_title="", in_stock_ingredients=None, prefs=None, api_key=None, user_id=None) -> dict:
-    """Generates an alternative dish recommendation dynamically using Gemini 3.8 Flash."""
+    """Generates an alternative dish recommendation dynamically using Gemini."""
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
@@ -669,7 +679,7 @@ Respond ONLY with valid JSON:
   "tip": "Chef cooking technique with pan heat and tips"
 }}
 """
-        for model_name in ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]:
+        for model_name in ["gemini-flash-lite-latest", "gemini-flash-latest"]:
             try:
                 resp_text = call_gemini_api(prompt, api_key=api_key, model_name=model_name, json_mode=True)
                 if resp_text and resp_text.strip():
@@ -689,15 +699,15 @@ Respond ONLY with valid JSON:
         "tip": "Sear protein 4 mins per side on high heat. Toss vegetables with olive oil and garlic."
     }
 
-def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None):
+def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, user_suggestions: str = None):
     """Generates an inventory-aligned, 7-day meal plan with breakfast, lunch, dinner, and snacks.
-    Dynamically uses Gemini 3.8 Flash when configured, with robust deterministic fallback.
+    Dynamically uses Gemini when configured (incorporating custom suggestions), with robust deterministic fallback.
     Respects cooking thermal shrinkage (W_raw = W_cooked / 0.70), user allergies, and freshness tiers."""
     if prefs is None:
         prefs = load_user_preferences(user_id=user_id)
         
     # 0. Attempt Dynamic AI Meal Plan Generation with Gemini
-    ai_plan = generate_ai_weekly_meal_plan(inventory_items=inventory_items, prefs=prefs, user_id=user_id)
+    ai_plan = generate_ai_weekly_meal_plan(inventory_items=inventory_items, prefs=prefs, user_id=user_id, user_suggestions=user_suggestions)
     if ai_plan:
         return ai_plan
     
@@ -923,12 +933,15 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None):
             "snack": safe_snacks[idx % len(safe_snacks)]
         })
 
-    return {
+    res_plan = {
         "last_generated": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
         "household_size": h_size,
         "diet_type": diet,
         "days": days_data
     }
+    if user_suggestions and user_suggestions.strip():
+        res_plan["user_suggestions"] = user_suggestions.strip()
+    return res_plan
 
 def generate_default_weekly_plan(prefs=None, user_id=None):
     """Fallback alias for generating default weekly plan."""

@@ -304,9 +304,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💶 *Cart Budget:* `{budget_txt}`\n\n"
         "Here is what you can do:\n"
         "• 🌅 `/today` (or `/menu`) - Today's meals, portions & chef tips\n"
-        "• 📅 `/week` - Browse the 7-day scheduled meal plan\n"
+        "• 📅 `/week [sugerencias]` - Browse 7-day schedule (or re-plan with suggestions)\n"
         "• 📸 *Send a photo* of meals or groceries with `/stock`\n"
-        "• `/plan` - Generate meal plan & assemble Wolt cart\n"
+        "• `/plan [sugerencias]` - Generate 7-day meal plan & Wolt cart with custom suggestions\n"
         "• `/settings` (or `/cartflow`) - Configure Auto-Pay & Budget Limits\n"
         "• `/budget <amount>` - Set max cart budget (e.g. `/budget 50`)\n"
         "• `/pref` - Configure allergies, avoided foods & diet type\n"
@@ -324,19 +324,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [
             InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan"),
-            InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals")
+            InlineKeyboardButton("✨ Plan con Sugerencias", callback_data="btn_prompt_plan_suggestions")
         ],
         [
-            InlineKeyboardButton("🛒 Custom Cart", callback_data="btn_prompt_cart"),
-            InlineKeyboardButton("👨‍🍳 Ask Recipe", callback_data="btn_prompt_recipe")
+            InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals"),
+            InlineKeyboardButton("🛒 Custom Cart", callback_data="btn_prompt_cart")
         ],
         [
-            InlineKeyboardButton("⚙️ Cart & Budget", callback_data="btn_settings"),
-            InlineKeyboardButton("👤 Dietary Profile", callback_data="btn_pref")
+            InlineKeyboardButton("👨‍🍳 Ask Recipe", callback_data="btn_prompt_recipe"),
+            InlineKeyboardButton("⚙️ Cart & Budget", callback_data="btn_settings")
         ],
         [
-            InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry"),
-            InlineKeyboardButton("🛍️ Wolt Session", callback_data="btn_wolt_status")
+            InlineKeyboardButton("👤 Dietary Profile", callback_data="btn_pref"),
+            InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -348,8 +348,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "📖 *Command Guide:*\n\n"
         "• `/today` (or `/menu`) - Today's scheduled meals, raw-to-cooked portions & freshness reminders.\n"
-        "• `/week` - 7-day full weekly meal schedule.\n"
-        "• `/plan` - Audits pantry memory, checks live Wolt deals, and generates a fresh 7-day meal plan.\n"
+        "• `/week [sugerencias]` - 7-day full weekly meal schedule. Pass suggestions to generate a new plan (e.g. `/week platos italianos y más salmón`).\n"
+        "• `/plan [sugerencias]` - Audits pantry memory and generates a 7-day meal plan & Wolt cart with optional suggestions (e.g. `/plan comida mexicana alta en proteína`).\n"
         "• `/settings` (or `/cartflow`) - Configure Auto-Pay flow, budget limits & store venues.\n"
         "• `/budget <amount>` - Set maximum cart budget (e.g. `/budget 50` or `/budget 0` to disable).\n"
         "• `/autopay [on|off]` - Toggle automated payment submission.\n"
@@ -364,7 +364,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/stop` - Abort active cart creation, scan, or proposal.\n"
         "• `/logs [lines]` - View live execution logs (default 25 lines).\n\n"
         "💬 *Natural Language Supported!*\n"
-        "You can simply talk to the bot in plain English (e.g., _'What should I eat for lunch?'_, _'Buy 6 bananas and arugula on Wolt'_, _'Set budget to 50 euros'_, _'I ate 2 eggs for breakfast'_).\n\n"
+        "You can simply talk to the bot in plain English or Spanish (e.g., _'Quiero un plan con comida mexicana y alta en proteína'_, _'What should I eat for lunch?'_, _'Buy 6 bananas and arugula on Wolt'_, _'Set budget to 50 euros'_).\n\n"
         "🛡️ *Budget & Auto-Pay Protection:*\n"
         "If Auto-Pay is enabled, the bot checks your configured budget before placing the order. If the cart total exceeds your budget, **Auto-Pay is automatically blocked** and the cart is kept open for manual review in your phone app!"
     )
@@ -660,17 +660,37 @@ async def eat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
-async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Displays the full 7-day meal plan breakdown."""
+async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE, suggestions: str = None):
+    """Displays the full 7-day meal plan breakdown, or generates a fresh one if suggestions are provided."""
     user_id = update.effective_user.id if update.effective_user else 0
-    plan = load_meal_plan(user_id=user_id)
+    
+    if suggestions is None and context and context.args:
+        suggestions = " ".join(context.args).strip()
+        
+    msg = None
+    if suggestions:
+        msg = await reply_safe(update, context, f"📐 Generando plan semanal de 7 días adaptado a tus sugerencias:\n_{suggestions}_...")
+        prefs = load_user_preferences(user_id=user_id)
+        plan = await asyncio.to_thread(
+            generate_weekly_meal_plan,
+            prefs=prefs,
+            user_id=user_id,
+            user_suggestions=suggestions
+        )
+        save_meal_plan(plan, user_id=user_id)
+    else:
+        plan = load_meal_plan(user_id=user_id)
+        
     days = plan.get("days", [])
     h_size = plan.get("household_size", 1)
+    applied_sug = plan.get("user_suggestions")
+    sug_txt = f"💡 *Sugerencias aplicadas:* _{applied_sug}_\n\n" if applied_sug else "\n"
     
     text = (
         f"📅 *7-DAY SMART MEAL PLAN*\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👥 *Household:* {h_size} person(s) | *Diet:* {plan.get('diet_type', 'Omnivore').capitalize()}\n\n"
+        f"👥 *Household:* {h_size} person(s) | *Diet:* {plan.get('diet_type', 'Omnivore').capitalize()}\n"
+        f"{sug_txt}"
     )
     for d in days:
         text += (
@@ -684,12 +704,19 @@ async def week_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [
+            InlineKeyboardButton("✨ Plan con Sugerencias", callback_data="btn_prompt_plan_suggestions"),
+            InlineKeyboardButton("🔄 Regenerar Plan", callback_data="btn_plan")
+        ],
+        [
             InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu"),
             InlineKeyboardButton("🛒 Build Wolt Cart", callback_data="btn_plan")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await reply_safe(update, context, text, reply_markup=reply_markup)
+    if msg:
+        await edit_safe(msg, text, reply_markup=reply_markup)
+    else:
+        await reply_safe(update, context, text, reply_markup=reply_markup)
 
 async def daily_morning_menu_job(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled task that runs every morning around 09:00 to deliver individualized meal plans to active users."""
@@ -878,10 +905,15 @@ async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_safe(update, context, text)
 
 @auth_guard
-async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generates a weekly meal plan and itemized grocery list customized for user preferences."""
+async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, suggestions: str = None):
+    """Generates a weekly meal plan and itemized grocery list customized for user preferences and optional suggestions."""
     user_id = update.effective_user.id if update.effective_user else 0
-    msg = await reply_safe(update, context, "📐 Calculating 7-day meal plan based on your dietary profile, allergies & Wolt catalog...")
+    
+    if suggestions is None and context and context.args:
+        suggestions = " ".join(context.args).strip()
+        
+    sug_notice = f" con sugerencias: _{suggestions}_" if suggestions else ""
+    msg = await reply_safe(update, context, f"📐 Calculando plan de 7 días adaptado a tu perfil{sug_notice}...")
     
     prefs = load_user_preferences(user_id=user_id)
     cfg = get_user_config(user_id)
@@ -894,13 +926,22 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Candidate shopping list tailored by diet, allergies, household size, and breakfast
     filtered_items = get_candidate_grocery_list(prefs, user_id=user_id)
 
-    # Synchronize and save the meal plan for these exact items
-    new_plan = generate_weekly_meal_plan(inventory_items=filtered_items, prefs=prefs, user_id=user_id)
+    # Synchronize and save the meal plan for these exact items with suggestions
+    new_plan = await asyncio.to_thread(
+        generate_weekly_meal_plan,
+        inventory_items=filtered_items,
+        prefs=prefs,
+        user_id=user_id,
+        user_suggestions=suggestions
+    )
     save_meal_plan(new_plan, user_id=user_id)
     user_pending_plans[user_id] = filtered_items
 
+    sug_header = f"\n💡 *Sugerencias aplicadas:* _{suggestions}_\n" if suggestions else ""
+
     plan_text = (
-        f"📋 *Proposed 7-Day Meal Plan ({diet.capitalize()} / {household_multiplier} person(s)):*\n\n"
+        f"📋 *Proposed 7-Day Meal Plan ({diet.capitalize()} / {household_multiplier} person(s)):*\n"
+        f"{sug_header}\n"
         "• *🍳 Daily Breakfasts:* 3-egg scrambles with avocado & toast, mozzarella & tomato omelettes\n"
         "• *Days 1–3 (Tier 1 Fresh):* High-protein main meals (fresh ground beef, chicken cuts, delicate arugula)\n"
         "• *Days 4–5 (Tier 2 Medium):* Sautéed chicken breast, sweet bell peppers & baby potatoes\n"
@@ -916,6 +957,10 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [
             InlineKeyboardButton("🛒 Build Cart on Wolt", callback_data="btn_confirm_cart"),
+        ],
+        [
+            InlineKeyboardButton("✨ Plan con Sugerencias", callback_data="btn_prompt_plan_suggestions"),
+            InlineKeyboardButton("📅 Ver Semana Completa", callback_data="btn_week_plan")
         ],
         [
             InlineKeyboardButton("⚡ Auto Pay & Order", callback_data="btn_confirm_autopay"),
@@ -1634,6 +1679,13 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await query_edit_safe(query, "❌ Meal photo discarded.")
     elif data == "btn_cancel_plan":
         await query_edit_safe(query, "❌ Meal plan cancelled.")
+    elif data == "btn_prompt_plan_suggestions":
+        user_waiting_state[user_id] = {"action": "plan_suggestions"}
+        await query.message.reply_text(
+            "✨ *Plan Semanal Personalizado con Sugerencias*\n\n"
+            "Escribe tus sugerencias, antojos o preferencias para esta semana (por ejemplo: _'Comida mexicana y alta en proteína'_, _'Platos con mucho salmón y sin lácteos'_, _'Comida italiana y rápida'_) o envía `/cancel` para abortar:",
+            parse_mode="Markdown"
+        )
     elif data == "btn_prompt_budget":
         user_waiting_state[user_id] = {"action": "set_budget"}
         await query.message.reply_text(
@@ -1713,7 +1765,12 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         state = user_waiting_state.pop(user_id)
         action = state.get("action")
         
-        if action == "set_budget":
+        if action == "plan_suggestions":
+            suggestions = user_text.strip()
+            await plan_command(update, context, suggestions=suggestions)
+            return
+
+        elif action == "set_budget":
             val_str = user_text.replace(",", ".").replace("€", "").strip()
             try:
                 val = float(val_str)
@@ -1897,9 +1954,11 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await menu_command(update, context)
     elif intent == "week_plan":
-        await week_command(update, context)
+        sug = params.get("user_suggestions")
+        await week_command(update, context, suggestions=sug)
     elif intent == "plan_week":
-        await plan_command(update, context)
+        sug = params.get("user_suggestions")
+        await plan_command(update, context, suggestions=sug)
     elif intent == "deals":
         await deals_command(update, context)
     elif intent == "pantry_status":
