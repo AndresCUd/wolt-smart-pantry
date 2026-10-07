@@ -9,8 +9,8 @@ import subprocess
 import argparse
 
 DEFAULT_HOST = os.getenv("RPI_HOST", "192.168.1.116")
-DEFAULT_USER = os.getenv("RPI_USER", "pi")
-REMOTE_DIR = os.getenv("RPI_DIR", "/home/pi/wolt-smart-pantry")
+DEFAULT_USER = os.getenv("RPI_USER", "andres")
+REMOTE_DIR = os.getenv("RPI_DIR", "/home/andres/wolt-smart-pantry")
 SERVICE_NAME = "wolt-bot"
 
 def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER):
