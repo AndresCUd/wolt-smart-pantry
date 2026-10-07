@@ -117,6 +117,25 @@ def list_active_users() -> list[int]:
             users.append(int(d))
     return users
 
+import threading
+USER_ABORT_FLAGS = {}
+
+def set_user_abort(user_id=None, abort=True):
+    """Sets or clears the abort signal for a specific user's running tasks."""
+    uid = user_id or 0
+    if uid not in USER_ABORT_FLAGS:
+        USER_ABORT_FLAGS[uid] = threading.Event()
+    if abort:
+        USER_ABORT_FLAGS[uid].set()
+    else:
+        USER_ABORT_FLAGS[uid].clear()
+
+def is_user_aborted(user_id=None) -> bool:
+    """Checks if the given user has requested to abort their current operation."""
+    uid = user_id or 0
+    ev = USER_ABORT_FLAGS.get(uid)
+    return ev.is_set() if ev else False
+
 def load_user_preferences(user_id=None):
     """Loads persistent user dietary preferences, allergies, and food avoidances."""
     target_file = get_user_preferences_file(user_id)
@@ -1612,6 +1631,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
     budget_exceeded = False
     final_price = 0.0
     added_count = 0
+    set_user_abort(user_id, abort=False)
 
     with sync_playwright() as p:
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
@@ -1634,6 +1654,10 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         print(f"[*] Initial cart total: {current_cart_total:.2f} €\n")
 
         for idx, item_data in enumerate(items, 1):
+            if is_user_aborted(user_id):
+                print(f"[*] 🛑 User {user_id or 'Default'} requested ABORT. Stopping cart building immediately.")
+                break
+
             if isinstance(item_data, (tuple, list)):
                 item_name = item_data[0]
                 item_qty = item_data[1]
@@ -1792,6 +1816,7 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
         "deals": [],
         "queries": {}
     }
+    set_user_abort(user_id, abort=False)
     
     with sync_playwright() as p:
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
@@ -1815,6 +1840,8 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
             try:
                 deal_cards = page.locator("main [data-test-id*='item-card'], main [data-test-id*='horizontal-item-card'], main [data-test-id*='vertical-item-card']").all()
                 for card in deal_cards[:25]:
+                    if is_user_aborted(user_id):
+                        break
                     if card.is_visible(timeout=100):
                         txt = card.inner_text() or ""
                         # Detect discounted prices (contains multiple € amounts or discount badges)
@@ -1838,6 +1865,9 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
         if queries:
             store_search_input = get_store_search_input(page)
             for query in queries:
+                if is_user_aborted(user_id):
+                    print(f"[*] 🛑 User {user_id or 'Default'} requested ABORT. Stopping inspection.")
+                    break
                 print(f"[*] Verifying products for query: '{query}'...")
                 query_results = []
                 try:

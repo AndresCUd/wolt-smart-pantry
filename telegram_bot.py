@@ -63,6 +63,8 @@ from wolt_manager import (
     generate_weekly_meal_plan,
     generate_default_weekly_plan,
     get_candidate_grocery_list,
+    set_user_abort,
+    is_user_aborted,
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
@@ -96,9 +98,10 @@ except Exception:
     BOT_TIMEZONE = pytz.timezone("Europe/Tallinn")
 DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 
-# Temporary in-memory session cache for pending shopping proposals and photo meals per user
+# Temporary in-memory session cache for pending shopping proposals, photo meals, and active tasks per user
 user_pending_plans = {}
 user_pending_photo_meal = {}
+active_user_tasks = {}
 
 def get_user_store_and_city(user_id: int):
     """Retrieves the store venue, city, and country for a given user ID."""
@@ -376,6 +379,29 @@ async def autopay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_safe(update, context, "🛡️ *Auto-Pay DISABLED!* Safe Review mode is active. Carts will be built and synced to your phone app without charging your card.")
     else:
         await reply_safe(update, context, "Usage: `/autopay on` or `/autopay off`")
+
+@auth_guard
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Aborts any running cart automation, store scanning, or pending proposals: /stop"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    
+    # 1. Signal background browser automation loops to break immediately
+    set_user_abort(user_id, abort=True)
+    
+    # 2. Cancel active asyncio task if running
+    task = active_user_tasks.pop(user_id, None)
+    if task and not task.done():
+        task.cancel()
+        
+    # 3. Clear pending in-memory proposals & meal photos
+    user_pending_plans.pop(user_id, None)
+    user_pending_photo_meal.pop(user_id, None)
+    
+    await reply_safe(
+        update, 
+        context, 
+        "🛑 *Operation Aborted!*\n\nAny active Wolt cart creation, store scanning, or pending proposals have been stopped."
+    )
 
 @auth_guard
 async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1501,6 +1527,7 @@ async def post_init(application):
         BotCommand("wolt", "🛍️ Check isolated Wolt browser session"),
         BotCommand("store", "🏬 Change Wolt store venue (/store wolt-market-maakri)"),
         BotCommand("setkey", "🔑 Configure Gemini API key for photo vision"),
+        BotCommand("stop", "🛑 Abort running cart creation or scan"),
         BotCommand("logs", "📜 View live system logs on PC (/logs 25)"),
         BotCommand("help", "📖 View complete command guide"),
         BotCommand("start", "👋 Welcome dashboard & main menu")
@@ -1530,6 +1557,9 @@ def main():
     # Register handlers
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("abort", stop_command))
+    app.add_handler(CommandHandler("cancel", stop_command))
     app.add_handler(CommandHandler("today", menu_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("recipe", recipe_command))
