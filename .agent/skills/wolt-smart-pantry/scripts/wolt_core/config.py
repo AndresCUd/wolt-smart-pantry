@@ -73,12 +73,6 @@ def get_user_browser_dir(user_id=None) -> str:
     """Returns the isolated Playwright browser profile directory for a specific user."""
     if user_id:
         b_dir = os.path.join(get_user_dir(user_id), ".wolt_profile")
-        if not os.path.exists(b_dir) and os.path.exists(USER_DATA_DIR):
-            try:
-                import shutil
-                shutil.copytree(USER_DATA_DIR, b_dir, dirs_exist_ok=True)
-            except Exception:
-                pass
     else:
         b_dir = USER_DATA_DIR
     os.makedirs(b_dir, exist_ok=True)

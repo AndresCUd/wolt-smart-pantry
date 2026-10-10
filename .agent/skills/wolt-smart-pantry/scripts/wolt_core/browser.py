@@ -787,16 +787,50 @@ def check_wolt_session(user_id=None, headless=None) -> dict:
 
 def login_mode(user_id=None):
     """Opens a non-headless browser session to allow the user to authenticate once for their profile."""
+    import shutil
     user_browser_dir = get_user_browser_dir(user_id)
     print(f"[*] Launching persistent browser profile at: {user_browser_dir}")
     with sync_playwright() as p:
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"]
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=user_browser_dir,
-            headless=False,
-            args=args,
-            viewport={"width": 1280, "height": 850}
-        )
+        context = None
+        try:
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_browser_dir,
+                headless=False,
+                args=args,
+                viewport={"width": 1280, "height": 850}
+            )
+        except Exception as e:
+            print(f"[!] Initial browser launch encountered error: {e}")
+            print("[*] Cleaning stale locks and corrupted cache in profile...")
+            for root_dir, _, files in os.walk(user_browser_dir):
+                for f in files:
+                    if f in ["LOCK", "SingletonLock", "SingletonSocket", "SingletonCookie"] or f.endswith(".pma"):
+                        try:
+                            os.remove(os.path.join(root_dir, f))
+                        except Exception:
+                            pass
+            try:
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_browser_dir,
+                    headless=False,
+                    args=args,
+                    viewport={"width": 1280, "height": 850}
+                )
+            except Exception as e2:
+                print(f"[!] Re-initializing clean browser profile due to: {e2}")
+                try:
+                    shutil.rmtree(user_browser_dir, ignore_errors=True)
+                    os.makedirs(user_browser_dir, exist_ok=True)
+                except Exception:
+                    pass
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_browser_dir,
+                    headless=False,
+                    args=args,
+                    viewport={"width": 1280, "height": 850}
+                )
+
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://wolt.com/en/discovery", wait_until="domcontentloaded")
         
