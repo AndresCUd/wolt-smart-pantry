@@ -103,6 +103,8 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
                                 "set_autopay": "Toggling 1-click auto-pay mode on or off",
                                 "change_store": "Changing store venue or city",
                                 "preferences": "Updating allergies, dietary profile, or household size",
+                                "user_status": "Viewing user profile, active configuration, API keys status, or account settings (e.g. 'show my config', 'my profile', 'how are my keys', 'ver mi perfil', 'mi configuracion', 'mis claves', 'user status')",
+                                "set_key": "Setting or configuring an API key (e.g. 'setkey AIzaSy...', 'set gemini key ...', 'guardar clave...')",
                                 "wolt_status": "Checking Wolt browser session or venue",
                                 "stop": "Aborting, stopping, or cancelling an operation",
                                 "chef_chat": "General greeting, culinary advice, or question"
@@ -137,6 +139,8 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
                                 "set_autopay": "Toggling 1-click auto-pay mode on or off",
                                 "change_store": "Changing store venue or city",
                                 "preferences": "Updating allergies, dietary profile, or household size",
+                                "user_status": "Viewing user profile, active configuration, API keys status, or account settings (e.g. 'show my config', 'my profile', 'how are my keys', 'ver mi perfil', 'mi configuracion', 'mis claves', 'user status')",
+                                "set_key": "Setting or configuring an API key (e.g. 'setkey AIzaSy...', 'set gemini key ...', 'guardar clave...')",
                                 "wolt_status": "Checking Wolt browser session or venue",
                                 "stop": "Aborting, stopping, or cancelling an operation",
                                 "chef_chat": "General greeting, culinary advice, or question"
@@ -183,6 +187,13 @@ def parse_natural_language_intent(user_text: str, user_id=None) -> dict:
                 parts = user_text.split()
                 if len(parts) > 1:
                     params["store_slug"] = parts[-2] if len(parts) > 2 else parts[-1]
+            elif chosen == "set_key":
+                parts = user_text.split()
+                for p in parts:
+                    if p.startswith("AIzaSy"):
+                        params["key_value"] = p.strip()
+                        params["key_type"] = "gemini"
+                        break
             return {
                 "intent": chosen,
                 "parameters": params,
@@ -198,6 +209,7 @@ You are the natural language understanding brain for the Wolt Smart Pantry Teleg
 Analyze this user message: "{user_text}"
 
 Classify into one of these intents:
+- "user_status": Asking to view user profile, active configuration, API keys status, budget, or account settings (e.g. "my profile", "show my config", "ver mi configuracion", "mis claves", "user status").
 - "today_menu": Asking what is on the menu today, what to eat, breakfast, lunch, or dinner.
 - "recipe": Asking for a cooking recipe or culinary technique for a dish or ingredients.
 - "week_plan": Asking to browse the 7-day scheduled weekly meal plan (may contain custom suggestions or requests).
@@ -248,6 +260,24 @@ Respond ONLY with a valid JSON object matching this schema:
     # Fallback Regex / Keyword classification
     low = user_text.lower().strip()
     
+    # 0. User Status / Profile / Config
+    if any(w in low for w in ["profile", "perfil", "mi config", "my config", "mis claves", "my keys", "user status", "mi estado", "account status", "estado de usuario", "who am i", "quien soy", "mis ajustes", "configuracion"]):
+        return {"intent": "user_status", "parameters": {}}
+
+    # 0.1 Set Key
+    if low.startswith("setkey") or low.startswith("set key") or "aizasy" in low:
+        parts = user_text.split()
+        for p in parts:
+            if p.startswith("AIzaSy"):
+                return {"intent": "set_key", "parameters": {"key_value": p.strip(), "key_type": "gemini"}}
+        return {"intent": "set_key", "parameters": {}}
+
+    if low.startswith("setjev") or low.startswith("set jev"):
+        parts = user_text.split()
+        if len(parts) > 1:
+            return {"intent": "set_jev", "parameters": {"key_value": parts[-1].strip()}}
+        return {"intent": "set_jev", "parameters": {}}
+
     # 1. Stop / Cancel
     if any(w in low for w in ["stop", "abort", "cancel", "halt", "quit", "stopp"]):
         return {"intent": "stop", "parameters": {}}

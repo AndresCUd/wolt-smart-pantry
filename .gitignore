@@ -31,6 +31,7 @@ __pycache__/
 *.jpg
 *.jpeg
 *.log
+*.log.*
 debug_dom.py
 dump_catalog.py
 dump_dom_items.py

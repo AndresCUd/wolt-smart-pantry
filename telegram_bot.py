@@ -2038,6 +2038,27 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if intent == "stop":
         await stop_command(update, context)
+    elif intent == "user_status":
+        await user_status_command(update, context)
+    elif intent == "set_key":
+        k_val = params.get("key_value")
+        if k_val:
+            cfg = get_user_config(user_id)
+            cfg["gemini_api_key"] = k_val
+            save_user_config(cfg, user_id=user_id)
+            await reply_safe(update, context, "✅ *Gemini API Key Guardada!*\n\nReconocimiento visual y chef dinámico ahora están activos para tu usuario.")
+        else:
+            await setkey_command(update, context)
+    elif intent == "set_jev":
+        k_val = params.get("key_value")
+        if k_val:
+            cfg = get_user_config(user_id)
+            cfg["jev_ai_api_key"] = k_val
+            cfg["typesafe_api_key"] = k_val
+            save_user_config(cfg, user_id=user_id)
+            await reply_safe(update, context, "⚡ *Jev AI Key Guardada!*\n\nEnrutamiento ultrarrápido System-1 ahora está activo para tu usuario.")
+        else:
+            await setjev_command(update, context)
     elif intent == "today_menu":
         meal_type = params.get("meal_type")
         if meal_type == "breakfast":
