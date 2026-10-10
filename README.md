@@ -125,6 +125,7 @@ python telegram_bot.py
 | Command | Description |
 | :--- | :--- |
 | `/start` | Welcome guide, quick action menu, and system overview. |
+| `/user` (or `/profile`) | View your profile, private API keys status, budget, and active settings. |
 | `/today` (or `/menu`) | Today's scheduled meals, raw-to-cooked portions & freshness alerts. |
 | `/week [sugerencias]` | Full 7-day meal schedule. Pass suggestions to customize (e.g. `/week platos mexicanos`). |
 | `/plan [sugerencias]` | Audits pantry memory and generates a 7-day meal plan & Wolt cart with suggestions. |

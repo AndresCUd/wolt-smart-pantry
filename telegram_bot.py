@@ -313,6 +313,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/pantry` - View virtual pantry memory & staples\n"
         "• `/deals` - Explore live discounts on Wolt\n"
         "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6`)\n"
+        "• 👤 `/user` - View your profile, private API keys & settings\n"
         "• `/wolt` - Inspect your isolated Wolt browser session\n"
         "• `/help` - View complete command guide\n\n"
         f"⏰ *Morning Schedule:* Daily menu arrives automatically at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone})."
@@ -335,7 +336,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("⚙️ Cart & Budget", callback_data="btn_settings")
         ],
         [
-            InlineKeyboardButton("👤 Dietary Profile", callback_data="btn_pref"),
+            InlineKeyboardButton("👤 Mi Perfil y Keys", callback_data="btn_user"),
             InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry")
         ]
     ]
@@ -347,6 +348,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Detailed command reference."""
     help_text = (
         "📖 *Command Guide:*\n\n"
+        "• `/user` (or `/profile`) - View your profile, private API keys status, budget, and active settings.\n"
         "• `/today` (or `/menu`) - Today's scheduled meals, raw-to-cooked portions & freshness reminders.\n"
         "• `/week [sugerencias]` - 7-day full weekly meal schedule. Pass suggestions to generate a new plan (e.g. `/week platos italianos y más salmón`).\n"
         "• `/plan [sugerencias]` - Audits pantry memory and generates a 7-day meal plan & Wolt cart with optional suggestions (e.g. `/plan comida mexicana alta en proteína`).\n"
@@ -1124,6 +1126,95 @@ async def logs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await reply_safe(update, context, f"⚠️ Error reading status: {e}")
 
 @auth_guard
+async def user_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows complete user profile, configured API keys (masked), budget, and preferences: /user"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    cfg = get_user_config(user_id)
+    prefs = load_user_preferences(user_id=user_id)
+    pantry = load_pantry_memory(user_id=user_id)
+    store, city, country = get_user_store_and_city(user_id)
+    
+    # 1. Masked API Keys
+    gemini_key = cfg.get("gemini_api_key", "")
+    jev_key = cfg.get("jev_ai_api_key") or cfg.get("typesafe_api_key", "")
+    
+    def mask_key(k):
+        if not k:
+            return "❌ No configurada"
+        if len(k) <= 8:
+            return "✅ Configurada (***)"
+        return f"✅ Configurada (`{k[:4]}...{k[-4:]}`)"
+
+    gemini_status = mask_key(gemini_key)
+    jev_status = mask_key(jev_key)
+
+    # 2. Checkout & Flow
+    autopay_active = cfg.get("auto_pay", False)
+    autopay_txt = "⚡ 1-Click Auto-Pay" if autopay_active else "🛡️ Safe Review (Manual)"
+    budget_limit = cfg.get("max_budget")
+    budget_txt = f"{budget_limit:.2f} €" if budget_limit else "Sin Límite (∞)"
+
+    # 3. Wolt browser session
+    browser_dir = get_user_browser_dir(user_id)
+    has_session = (
+        os.path.exists(os.path.join(browser_dir, "Default", "Cookies"))
+        or os.path.exists(os.path.join(browser_dir, "Network", "Cookies"))
+        or os.path.exists(os.path.join(browser_dir, "Cookies"))
+    )
+    wolt_txt = "✅ Sesión Guardada" if has_session else "⚠️ Requiere login (`/wolt`)"
+
+    # 4. Dietary & Household
+    diet = prefs.get("diet_type", "omnivore")
+    h_size = prefs.get("household_size", 1)
+    allergies = ", ".join(prefs.get("allergies", [])) or "Ninguna"
+    avoided = ", ".join(prefs.get("avoided_ingredients", [])) or "Ninguno"
+
+    # 5. Pantry counts
+    n_prot = len(pantry.get("proteins", []))
+    n_prod = len(pantry.get("produce", []))
+    n_stap = len(pantry.get("staples", []))
+
+    text = (
+        "👤 *Tu Perfil y Configuración Activa*\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🆔 *Telegram User ID:* `{user_id}`\n"
+        f"🏪 *Tienda Wolt:* `{store}` ({city.capitalize()}, {country.upper()})\n\n"
+        "🔑 *Estado de API Keys Privadas:*\n"
+        f"• ♊ *Gemini AI (Visión & Chef):* {gemini_status}\n"
+        f"• ⚡ *Jev AI (Enrutamiento NLU):* {jev_status}\n\n"
+        "⚙️ *Ajustes de Carrito y Seguridad:*\n"
+        f"• 💳 *Modo de Pago:* `{autopay_txt}`\n"
+        f"• 💶 *Límite Presupuesto:* `{budget_txt}`\n"
+        f"• 🌐 *Navegador Wolt:* {wolt_txt}\n\n"
+        "🥗 *Perfil Dietético y Hogar:*\n"
+        f"• 🍽️ *Dieta:* `{diet}` | 👥 *Hogar:* `{h_size} persona(s)`\n"
+        f"• 🚫 *Alergias:* `{allergies}`\n"
+        f"• 🙅 *Ingredientes Evitados:* `{avoided}`\n\n"
+        "📦 *Inventario en Memoria:*\n"
+        f"• 🥩 `{n_prot}` proteínas | 🥑 `{n_prod}` frescos | 🧂 `{n_stap}` básicos\n\n"
+        "💡 *Comandos para actualizar:*\n"
+        "• `/setkey <clave>` - Actualizar clave de Gemini\n"
+        "• `/setjev <clave>` - Actualizar clave de Jev AI\n"
+        "• `/budget <monto>` - Cambiar límite en €\n"
+        "• `/autopay on|off` - Alternar modo de pago\n"
+        "• `/pref` - Editar alergias y porciones\n"
+        "• `/pantry` - Ver inventario detallado"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("⚙️ Ajustes Carrito", callback_data="btn_settings"),
+            InlineKeyboardButton("🥗 Preferencias", callback_data="btn_pref")
+        ],
+        [
+            InlineKeyboardButton("📦 Ver Despensa", callback_data="btn_pantry"),
+            InlineKeyboardButton("🌐 Estado Wolt", callback_data="btn_wolt_status")
+        ]
+    ]
+
+    await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
 async def setkey_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Configures or updates private user GEMINI_API_KEY for vision AI recognition: /setkey <key>"""
     user_id = update.effective_user.id if update.effective_user else 0
@@ -1398,6 +1489,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         await preferences_command(update, context)
     elif data == "btn_settings":
         await settings_command(update, context)
+    elif data == "btn_user":
+        await user_status_command(update, context)
     elif data == "btn_wolt_status":
         await wolt_command(update, context)
     elif data == "btn_toggle_autopay":
@@ -2149,6 +2242,7 @@ async def post_init(application):
         BotCommand("eat", "✅ Log a meal & deduct ingredients (/eat breakfast)"),
         BotCommand("week", "📅 Browse 7-day scheduled meal plan"),
         BotCommand("plan", "📋 Generate 7-day meal plan & Wolt cart list"),
+        BotCommand("user", "👤 Ver tu perfil, API keys y configuración activa"),
         BotCommand("settings", "⚙️ Configure Auto-Pay & Budget Limits"),
         BotCommand("budget", "💶 Set max cart budget (/budget 50)"),
         BotCommand("autopay", "💳 Toggle auto payment (/autopay on|off)"),
@@ -2203,6 +2297,7 @@ def main():
     app.add_handler(CommandHandler("dinner", dinner_command))
     app.add_handler(CommandHandler("snack", snack_command))
     app.add_handler(CommandHandler("eat", eat_command))
+    app.add_handler(CommandHandler(["user", "me", "profile", "myconfig"], user_status_command))
     app.add_handler(CommandHandler("settings", settings_command))
     app.add_handler(CommandHandler("cartflow", settings_command))
     app.add_handler(CommandHandler("budget", budget_command))
