@@ -140,6 +140,9 @@ def display_pantry_memory(user_id=None):
 
 def restock_pantry_from_detected_items(detected_items, source="photo", photo_path=None, user_id=None):
     """Adds newly purchased or inventoried groceries detected from a photo or receipt into the user's pantry memory."""
+    if not detected_items:
+        return "⚠️ *No items detected to restock.*", []
+
     pantry = load_pantry_memory(user_id=user_id)
     now_str = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     

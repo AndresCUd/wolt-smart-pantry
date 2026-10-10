@@ -1267,13 +1267,46 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     res = await asyncio.to_thread(analyze_photo_with_vision, save_path, None, user_id)
     user_pending_photo_meal[user_id] = {"path": save_path, "data": res}
     
-    dish_title = res.get("dish_title", "Cooked Meal")
-    meal_type = res.get("meal_type", "breakfast").capitalize()
-    comp = res.get("composition", {})
+    if res.get("error"):
+        err_type = res.get("error")
+        if err_type == "missing_api_key":
+            await edit_safe(
+                msg,
+                "🔑 *Configura tu Gemini API Key para Reconocimiento Visual*\n\n"
+                "No has configurado tu clave personal de Gemini en este bot.\n"
+                "Para que la IA pueda auditar y reconocer los productos de tu nevera o platos de comida, necesitas enlazar tu API key gratuita de Google Gemini.\n\n"
+                "👉 *Cómo configurarla en 30 segundos:*\n"
+                "1. Entra a [Google AI Studio](https://aistudio.google.com) y crea tu API key gratuita.\n"
+                "2. Envía al bot el comando:\n"
+                "`/setkey TU_API_KEY`\n\n"
+                "Una vez guardada, vuelve a enviar la foto con `/stock` para añadirla a tu despensa."
+            )
+            return
+        else:
+            await edit_safe(
+                msg,
+                f"⚠️ *Error al procesar la foto con Gemini Vision:*\n\n"
+                f"_{res.get('message', 'No se pudo conectar con el servicio de visión')}_\n\n"
+                "Verifica que tu clave sea válida ejecutando `/setkey` o intenta con otra foto."
+            )
+            return
+
     items = res.get("detected_items", [])
+    if not items:
+        await edit_safe(
+            msg,
+            "🔍 *No se detectaron productos en la imagen.*\n\n"
+            "Asegúrate de que los alimentos o empaques sean visibles y cuenten con buena iluminación.\n"
+            "También puedes añadir stock manualmente con `/stock <producto> <cantidad>`."
+        )
+        return
+
+    dish_title = res.get("dish_title", "Foto de Inventario")
+    meal_type = (res.get("meal_type") or "desayuno").capitalize()
+    comp = res.get("composition", {})
     macros = res.get("estimated_macros", {})
     notes = res.get("chef_notes", "")
-    photo_type = res.get("type", "cooked_meal")
+    photo_type = res.get("photo_type", "cooked_meal")
     
     # If the user explicitly supplied /stock in caption or if detected as grocery restock:
     if is_stock_caption or photo_type == "groceries_restock":

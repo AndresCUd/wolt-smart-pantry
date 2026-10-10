@@ -388,89 +388,167 @@ Format your response in clean GitHub Markdown for Telegram mobile chat:
     )
 
 def analyze_photo_with_vision(image_path: str, api_key: str = None, user_id=None) -> dict:
-    """Analyzes a food or kitchen photo using Gemini Multimodal Vision or intelligent fallback."""
+    """Analyzes a food or kitchen photo using Gemini Multimodal Vision across google-genai, google.generativeai, and direct REST endpoint."""
     if not api_key and user_id:
         cfg = get_user_config(user_id)
         api_key = cfg.get("gemini_api_key", "")
         
-    if api_key:
-        for model_name in ["gemini-flash-lite-latest", "gemini-flash-latest"]:
-            try:
-                from google import genai
-                from PIL import Image
-                
-                client = genai.Client(api_key=api_key)
-                pil_img = Image.open(image_path)
-                
-                prompt = """
-You are an expert culinary vision AI, nutritionist, and smart grocery pantry auditor.
+    if not api_key:
+        return {
+            "error": "missing_api_key",
+            "message": "No private Gemini API key configured. Run /setkey AIzaSy... to activate photo vision recognition.",
+            "detected_items": [],
+            "photo_type": "unknown"
+        }
+
+    prompt = """
+You are an expert culinary vision AI, nutritionist, and smart grocery pantry auditor for supermarket items in Estonia/Europe.
 Analyze the provided photo with high precision.
 
 Determine:
 1. What type of photo is this?
-   - "cooked_meal": A prepared/cooked meal plate or bowl ready to eat (e.g. breakfast scramble, dinner plate).
-   - "groceries_restock": Freshly bought groceries, raw food items, food packaging, pantry shelf, fridge contents, or shopping receipt.
+   - "groceries_restock": Freshly bought groceries, supermarket food packaging, items on a counter/table, pantry shelf, fridge/freezer contents, or shopping receipt.
+   - "cooked_meal": A prepared/cooked meal plate or bowl ready to eat (e.g. breakfast scramble, steak with veggies, salad).
 
-2. If it is "cooked_meal":
+2. If it is "groceries_restock":
+   - Inspect every visible package, bag, carton, bottle, fruit, vegetable, or container.
+   - Read packaging labels (in English or Estonian, e.g. Tallegg broilerifilee, kanafilee, hakkliha, riivjuust, juust, piim, munad, tortiljad, avokaado, banaan, sidrun/lemon juice).
+   - detected_items: Itemized list of every distinct food product with realistic counts or packages.
+     Format: [{"name": "<Specific Product Name>", "qty": <int or float>, "unit": "<pack | pcs | slices | g | kg | bottle | box>", "category": "protein" | "produce" | "staple" | "dairy"}]
+   - dish_title: Summary description, e.g. "Fridge Grocery Restock" or "Kitchen Inventory Audit".
+   - chef_notes: Short summary of detected items.
+
+3. If it is "cooked_meal":
    - meal_type: "breakfast", "lunch", "dinner", or "snack".
    - dish_title: Concise culinary title of the prepared meal.
-   - detected_items: List of raw ingredients consumed in this dish with realistic weights/quantities for 1-2 servings.
-     Format: [{"name": "Farm eggs", "qty": 2, "unit": "eggs", "category": "protein"}, {"name": "Toast bread", "qty": 2, "unit": "slices", "category": "grain"}]
-   - nutrition_estimate: {"calories": ~X, "protein_g": ~Y, "carbs_g": ~Z, "fat_g": ~W}
+   - detected_items: Raw ingredients in this dish with realistic weights/quantities for 1-2 servings.
    - chef_notes: 1 sentence praising or advising on the cooking technique.
 
-3. If it is "groceries_restock":
-   - detected_items: Itemized inventory of every distinct grocery or food product visible with counts or package units.
-     Format: [{"name": "Eesti Pagar Tosta", "qty": 1, "unit": "pack", "category": "staple"}, {"name": "Eggs", "qty": 10, "unit": "pcs", "category": "protein"}]
-   - notes: Short summary of detected groceries.
-
-Respond ONLY with a valid JSON object:
+Respond ONLY with a valid JSON object matching this schema:
 {
-  "photo_type": "cooked_meal" | "groceries_restock",
-  "meal_type": "breakfast" | "lunch" | "dinner" | "snack" | null,
+  "photo_type": "groceries_restock" | "cooked_meal",
   "dish_title": "<string>",
+  "meal_type": "breakfast" | "lunch" | "dinner" | "snack" | null,
   "detected_items": [
     {
       "name": "<Item Name in English or Estonian>",
       "qty": <number>,
-      "unit": "<g | pcs | slices | pack | kg | null>",
+      "unit": "<pack | pcs | slices | g | kg | bottle | box | null>",
       "category": "protein" | "produce" | "staple" | "dairy"
     }
   ],
-  "nutrition_estimate": {
+  "composition": {
+    "proteins": ["<Protein items>"],
+    "carbs": ["<Carb items>"],
+    "produce": ["<Produce items>"],
+    "dairy_and_fats": ["<Dairy and fat items>"]
+  },
+  "estimated_macros": {
     "calories": 450,
     "protein_g": 28,
     "carbs_g": 35,
     "fat_g": 22
   },
-  "notes": "<string>"
+  "chef_notes": "<string>"
 }
 """
-                resp = client.models.generate_content(
-                    model=model_name,
-                    contents=[prompt, pil_img]
-                )
-                if resp and resp.text:
-                    clean = resp.text.strip()
-                    if clean.startswith("```"):
-                        clean = re.sub(r'^```(?:json)?\n', '', clean)
-                        clean = re.sub(r'\n```$', '', clean)
-                    return json.loads(clean)
-            except Exception as e:
-                print(f"[!] Gemini Vision analysis error with {model_name}: {e}")
 
-    # Fallback heuristic if API key is absent or vision call fails
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-flash-latest"]
+    last_error = ""
+
+    # Strategy 1: Official Google GenAI SDK (v1)
+    for model_name in models_to_try:
+        try:
+            from google import genai
+            from PIL import Image
+            client = genai.Client(api_key=api_key)
+            pil_img = Image.open(image_path)
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=[prompt, pil_img]
+            )
+            if resp and resp.text:
+                clean = resp.text.strip()
+                if clean.startswith("```"):
+                    clean = re.sub(r'^```(?:json)?\n', '', clean)
+                    clean = re.sub(r'\n```$', '', clean)
+                data = json.loads(clean)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            last_error = str(e)
+
+    # Strategy 2: Legacy google.generativeai SDK
+    for model_name in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+        try:
+            import google.generativeai as legacy_genai
+            from PIL import Image
+            legacy_genai.configure(api_key=api_key)
+            model = legacy_genai.GenerativeModel(model_name)
+            pil_img = Image.open(image_path)
+            resp = model.generate_content([prompt, pil_img])
+            if resp and resp.text:
+                clean = resp.text.strip()
+                if clean.startswith("```"):
+                    clean = re.sub(r'^```(?:json)?\n', '', clean)
+                    clean = re.sub(r'\n```$', '', clean)
+                data = json.loads(clean)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            last_error = str(e)
+
+    # Strategy 3: Direct HTTP REST API via v1beta endpoint (Zero external dependencies)
+    import base64
+    import mimetypes
+    try:
+        mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+        with open(image_path, "rb") as f:
+            b64_img = base64.b64encode(f.read()).decode("utf-8")
+
+        for model_name in models_to_try:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                payload = {
+                    "contents": [{
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime_type,
+                                    "data": b64_img
+                                }
+                            }
+                        ]
+                    }],
+                    "generationConfig": {
+                        "responseMimeType": "application/json"
+                    }
+                }
+                req_data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+                    candidates = res_body.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts and "text" in parts[0]:
+                            raw_txt = parts[0]["text"].strip()
+                            clean = re.sub(r'^```(?:json)?\n', '', raw_txt)
+                            clean = re.sub(r'\n```$', '', clean)
+                            data = json.loads(clean)
+                            if isinstance(data, dict):
+                                return data
+            except Exception as e_rest:
+                last_error = str(e_rest)
+    except Exception as e_prep:
+        last_error = str(e_prep)
+
     return {
-        "photo_type": "cooked_meal",
-        "meal_type": "breakfast",
-        "dish_title": "Egg & Toast Breakfast",
-        "detected_items": [
-            {"name": "Farm Eggs", "qty": 2, "unit": "eggs", "category": "protein"},
-            {"name": "Toast Bread", "qty": 2, "unit": "slices", "category": "grain"},
-            {"name": "Butter", "qty": 10, "unit": "g", "category": "fat"}
-        ],
-        "nutrition_estimate": {"calories": 380, "protein_g": 18, "carbs_g": 28, "fat_g": 20},
-        "notes": "Photo received. Connect your Gemini API Key with /setkey for automated AI visual ingredient detection."
+        "error": "vision_api_error",
+        "message": f"Gemini Vision error across all strategies. Last error: {last_error}",
+        "detected_items": [],
+        "photo_type": "unknown"
     }
 
 def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None, user_suggestions: str = None) -> dict:
