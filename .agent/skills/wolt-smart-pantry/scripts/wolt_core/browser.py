@@ -792,12 +792,14 @@ def login_mode(user_id=None):
     print(f"[*] Launching persistent browser profile at: {user_browser_dir}")
     with sync_playwright() as p:
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"]
+        ignore_default = ["--enable-automation"]
         context = None
         try:
             context = p.chromium.launch_persistent_context(
                 user_data_dir=user_browser_dir,
                 headless=False,
                 args=args,
+                ignore_default_args=ignore_default,
                 viewport={"width": 1280, "height": 850}
             )
         except Exception as e:
@@ -815,6 +817,7 @@ def login_mode(user_id=None):
                     user_data_dir=user_browser_dir,
                     headless=False,
                     args=args,
+                    ignore_default_args=ignore_default,
                     viewport={"width": 1280, "height": 850}
                 )
             except Exception as e2:
@@ -828,9 +831,14 @@ def login_mode(user_id=None):
                     user_data_dir=user_browser_dir,
                     headless=False,
                     args=args,
+                    ignore_default_args=ignore_default,
                     viewport={"width": 1280, "height": 850}
                 )
 
+        try:
+            context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+        except Exception:
+            pass
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://wolt.com/en/discovery", wait_until="domcontentloaded")
         
@@ -848,9 +856,10 @@ def login_mode(user_id=None):
         if user_id:
             print(f">>> Telegram User Profile: {user_id}")
         print("1. Click 'Log in' / 'Logi sisse' in the opened browser window.")
-        print("2. Enter your phone number or email and enter the verification code.")
+        print("2. Enter your email (Gmail) or phone number to receive Wolt's code.")
+        print("   💡 TIP: Use 'Continue with email' or phone number instead of Google button.")
         print("3. Confirm your default delivery address.")
-        print("4. When finished, CLOSE the browser window.")
+        print("4. When finished and logged in, CLOSE the browser window.")
         print("="*60 + "\n")
         
         was_logged_in = False
