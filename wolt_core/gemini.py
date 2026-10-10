@@ -14,62 +14,138 @@ from datetime import datetime
 
 from .config import get_user_config, load_user_preferences
 
-def call_gemini_api(prompt: str, api_key: str = None, model_name: str = "gemini-flash-lite-latest", json_mode: bool = False) -> str:
-    """Universal Gemini API client with fallback across google-genai, google.generativeai, and direct REST endpoint."""
+_MODEL_CACHE = {}  # api_key_hash -> (timestamp, [models])
+
+def list_supported_gemini_models(api_key: str) -> list[str]:
+    """Dynamically queries Google Gemini API's ModelService to find models supporting generateContent for this API key."""
+    if not api_key:
+        return []
+    clean_key = api_key.strip()
+    key_hash = hash(clean_key)
+    now = time.time()
+
+    if key_hash in _MODEL_CACHE:
+        ts, cached = _MODEL_CACHE[key_hash]
+        if now - ts < 21600 and cached:
+            return cached
+
+    discovered = []
+    for ver in ["v1beta", "v1"]:
+        try:
+            url = f"https://generativelanguage.googleapis.com/{ver}/models?key={clean_key}"
+            req = urllib.request.Request(url, headers={"User-Agent": "WoltSmartPantry/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = data.get("models", [])
+                for m in models:
+                    methods = m.get("supportedGenerationMethods", [])
+                    if "generateContent" in methods:
+                        name = m.get("name", "").replace("models/", "").strip()
+                        if name and name not in discovered:
+                            discovered.append(name)
+            if discovered:
+                break
+        except Exception:
+            pass
+
+    if discovered:
+        def _model_priority(name: str):
+            n = name.lower()
+            if "3.8-flash" in n: return 5
+            if "3.7-flash" in n: return 10
+            if "3.6-flash" in n: return 15
+            if "3.5-flash-lite" in n: return 20
+            if "3.5-flash" in n: return 22
+            if "2.5-flash-lite" in n: return 25
+            if "2.5-flash" in n: return 28
+            if "2.0-flash" in n and "exp" not in n: return 30
+            if "1.5-flash" in n: return 35
+            if "flash" in n: return 40
+            if "pro" in n: return 50
+            return 90
+
+        discovered.sort(key=_model_priority)
+        _MODEL_CACHE[key_hash] = (now, discovered)
+        return discovered
+
+    # Fallback if listModels request failed
+    fallback = [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-1.5-pro",
+    ]
+    return fallback
+
+def call_gemini_api(prompt: str, api_key: str = None, model_name: str = None, json_mode: bool = False) -> str:
+    """Universal Gemini API client with fallback across discovered models, google-genai, google.generativeai, and direct REST endpoint."""
     if not api_key:
         return ""
+    api_key = api_key.strip()
 
-    # Strategy 1: Official Google GenAI SDK (v1)
-    try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        config = {}
-        if json_mode:
-            config["response_mime_type"] = "application/json"
-        resp = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=config if config else None
-        )
-        if resp and resp.text:
-            return resp.text.strip()
-    except Exception:
-        pass
+    models_to_try = [model_name] if model_name else []
+    for m in list_supported_gemini_models(api_key):
+        if m not in models_to_try:
+            models_to_try.append(m)
+    if not models_to_try:
+        models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
 
-    # Strategy 2: Legacy google.generativeai SDK
-    try:
-        import google.generativeai as legacy_genai
-        legacy_genai.configure(api_key=api_key)
-        gen_config = {"response_mime_type": "application/json"} if json_mode else {}
-        model = legacy_genai.GenerativeModel(model_name, generation_config=gen_config)
-        resp = model.generate_content(prompt)
-        if resp and resp.text:
-            return resp.text.strip()
-    except Exception:
-        pass
+    for m_target in models_to_try[:4]:
+        # Strategy 1: Official Google GenAI SDK (v1)
+        try:
+            from google import genai
+            client = genai.Client(api_key=api_key)
+            config = {}
+            if json_mode:
+                config["response_mime_type"] = "application/json"
+            resp = client.models.generate_content(
+                model=m_target,
+                contents=prompt,
+                config=config if config else None
+            )
+            if resp and resp.text:
+                return resp.text.strip()
+        except Exception:
+            pass
 
-    # Strategy 3: Direct HTTP REST API via v1beta endpoint
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        if json_mode:
-            payload["generationConfig"] = {"responseMimeType": "application/json"}
-            
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as response:
-            res_body = json.loads(response.read().decode("utf-8"))
-            candidates = res_body.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts and "text" in parts[0]:
-                    return parts[0]["text"].strip()
-    except Exception as e:
-        print(f"[!] Gemini REST API call failed: {e}")
+        # Strategy 2: Legacy google.generativeai SDK
+        try:
+            import google.generativeai as legacy_genai
+            legacy_genai.configure(api_key=api_key)
+            gen_config = {"response_mime_type": "application/json"} if json_mode else {}
+            model = legacy_genai.GenerativeModel(m_target, generation_config=gen_config)
+            resp = model.generate_content(prompt)
+            if resp and resp.text:
+                return resp.text.strip()
+        except Exception:
+            pass
+
+        # Strategy 3: Direct HTTP REST API via v1beta and v1 endpoints
+        for ver in ["v1beta", "v1"]:
+            try:
+                url = f"https://generativelanguage.googleapis.com/{ver}/models/{m_target}:generateContent?key={api_key}"
+                payload = {
+                    "contents": [{
+                        "parts": [{"text": prompt}]
+                    }]
+                }
+                if json_mode:
+                    payload["generationConfig"] = {"responseMimeType": "application/json"}
+
+                req_data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+                    candidates = res_body.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts and "text" in parts[0]:
+                            return parts[0]["text"].strip()
+            except Exception:
+                pass
 
     return ""
 
@@ -504,8 +580,20 @@ Respond ONLY with a valid JSON object matching this schema:
             with open(src_path, "rb") as f:
                 return f.read(), "image/jpeg"
 
-    models_to_try = ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
+    discovered = list_supported_gemini_models(api_key)
+    models_to_try = [m for m in discovered] if discovered else [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-1.5-pro",
+    ]
+    # Limit models tried to top 4 to prevent slow cascading timeouts
+    models_to_try = models_to_try[:4]
     last_error = ""
+    attempted_errors = []
 
     # Strategy 1: Official Google GenAI SDK (v1)
     for model_name in models_to_try:
@@ -529,6 +617,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 if isinstance(data, dict):
                     return data
         except Exception as e:
+            attempted_errors.append(f"SDK:{model_name}->{e}")
             last_error = str(e)
 
     # Strategy 2: Legacy google.generativeai SDK
@@ -551,6 +640,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 if isinstance(data, dict):
                     return data
         except Exception as e:
+            attempted_errors.append(f"Legacy:{model_name}->{e}")
             last_error = str(e)
 
     # Strategy 3: Direct HTTP REST API via v1beta and v1 endpoints (Zero external dependencies)
@@ -560,13 +650,10 @@ Respond ONLY with a valid JSON object matching this schema:
         img_bytes, mime_type = _optimize_image_for_vision(image_path)
         b64_img = base64.b64encode(img_bytes).decode("utf-8")
 
-        candidate_configs = [
-            ("v1beta", "gemini-1.5-flash"),
-            ("v1beta", "gemini-2.5-flash"),
-            ("v1", "gemini-1.5-flash"),
-            ("v1beta", "gemini-1.5-pro"),
-            ("v1beta", "gemini-2.0-flash-exp"),
-        ]
+        candidate_configs = []
+        for m_name in models_to_try:
+            candidate_configs.append(("v1beta", m_name))
+            candidate_configs.append(("v1", m_name))
 
         for api_ver, m_name in candidate_configs:
             m_code = m_name.replace("models/", "")
@@ -590,7 +677,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 }
                 req_data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=45) as response:
+                with urllib.request.urlopen(req, timeout=35) as response:
                     res_body = json.loads(response.read().decode("utf-8"))
                     candidates = res_body.get("candidates", [])
                     if candidates:
@@ -605,17 +692,22 @@ Respond ONLY with a valid JSON object matching this schema:
             except urllib.error.HTTPError as e_http:
                 try:
                     err_json = json.loads(e_http.read().decode("utf-8"))
-                    last_error = f"{e_http.code} {err_json.get('error', {}).get('message', e_http.reason)}"
+                    msg = err_json.get("error", {}).get("message", e_http.reason)
+                    attempted_errors.append(f"{m_code}:{e_http.code} {msg}")
+                    last_error = f"{e_http.code} {msg}"
                 except Exception:
+                    attempted_errors.append(f"{m_code}:{e_http.code} {e_http.reason}")
                     last_error = f"HTTP {e_http.code}: {e_http.reason}"
             except Exception as e_rest:
+                attempted_errors.append(f"{m_code}->{e_rest}")
                 last_error = str(e_rest)
     except Exception as e_prep:
         last_error = str(e_prep)
 
+    err_summary = " | ".join(attempted_errors[-3:]) if attempted_errors else last_error
     return {
         "error": "vision_api_error",
-        "message": f"Gemini Vision error across all strategies. Last error: {last_error}",
+        "message": f"Gemini Vision error across all strategies. Last: {err_summary}",
         "detected_items": [],
         "photo_type": "unknown"
     }
