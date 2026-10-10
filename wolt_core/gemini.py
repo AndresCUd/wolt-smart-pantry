@@ -483,6 +483,8 @@ Respond ONLY with a valid JSON object matching this schema:
 }
 """
 
+    api_key = api_key.strip()
+
     def _optimize_image_for_vision(src_path: str, max_dim=1280, quality=85) -> tuple[bytes, str]:
         """Compresses and scales high-res smartphone images to ~150KB to prevent network timeouts."""
         try:
@@ -502,7 +504,7 @@ Respond ONLY with a valid JSON object matching this schema:
             with open(src_path, "rb") as f:
                 return f.read(), "image/jpeg"
 
-    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
+    models_to_try = ["gemini-1.5-flash", "gemini-2.5-flash", "gemini-1.5-pro"]
     last_error = ""
 
     # Strategy 1: Official Google GenAI SDK (v1)
@@ -530,7 +532,7 @@ Respond ONLY with a valid JSON object matching this schema:
             last_error = str(e)
 
     # Strategy 2: Legacy google.generativeai SDK
-    for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+    for model_name in models_to_try:
         try:
             import google.generativeai as legacy_genai
             from PIL import Image
@@ -551,15 +553,25 @@ Respond ONLY with a valid JSON object matching this schema:
         except Exception as e:
             last_error = str(e)
 
-    # Strategy 3: Direct HTTP REST API via v1beta endpoint (Zero external dependencies)
+    # Strategy 3: Direct HTTP REST API via v1beta and v1 endpoints (Zero external dependencies)
     import base64
+    import urllib.error
     try:
         img_bytes, mime_type = _optimize_image_for_vision(image_path)
         b64_img = base64.b64encode(img_bytes).decode("utf-8")
 
-        for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+        candidate_configs = [
+            ("v1beta", "gemini-1.5-flash"),
+            ("v1beta", "gemini-2.5-flash"),
+            ("v1", "gemini-1.5-flash"),
+            ("v1beta", "gemini-1.5-pro"),
+            ("v1beta", "gemini-2.0-flash-exp"),
+        ]
+
+        for api_ver, m_name in candidate_configs:
+            m_code = m_name.replace("models/", "")
             try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{m_code}:generateContent?key={api_key}"
                 payload = {
                     "contents": [{
                         "parts": [
@@ -590,6 +602,12 @@ Respond ONLY with a valid JSON object matching this schema:
                             data = json.loads(clean)
                             if isinstance(data, dict):
                                 return data
+            except urllib.error.HTTPError as e_http:
+                try:
+                    err_json = json.loads(e_http.read().decode("utf-8"))
+                    last_error = f"{e_http.code} {err_json.get('error', {}).get('message', e_http.reason)}"
+                except Exception:
+                    last_error = f"HTTP {e_http.code}: {e_http.reason}"
             except Exception as e_rest:
                 last_error = str(e_rest)
     except Exception as e_prep:
