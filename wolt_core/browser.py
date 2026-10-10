@@ -868,19 +868,25 @@ def login_mode(user_id=None):
                 break
             
         print("[*] Browser window closed.")
+        if not was_logged_in:
+            try:
+                cookies = context.cookies()
+                was_logged_in = any("token" in c.get("name", "").lower() or "session" in c.get("name", "").lower() for c in cookies)
+            except Exception:
+                pass
         try:
             context.close()
         except Exception:
             pass
 
-        # Final verification
-        final_check = check_wolt_session(user_id=user_id, headless=True)
-        if final_check.get("logged_in"):
-            print(f"✅ Active Wolt session saved successfully for User: {user_id or 'Default'}!")
-            print("👉 Run this command to sync the session to your Raspberry Pi:")
-            sync_cmd = f"python scripts/deploy_pi.py sync-profile" + (f" --user {user_id}" if user_id else "")
-            print(f"   {sync_cmd}\n")
-        else:
-            print("⚠️ [WARNING] No active login was detected in this session.")
-            print("   Make sure you clicked 'Log in' and verified your Wolt account before closing the window.")
-            print("   To try again: python wolt_manager.py login" + (f" --user {user_id}" if user_id else ""))
+    # OUTSIDE with sync_playwright(): Now safe to run final verification
+    final_check = check_wolt_session(user_id=user_id, headless=True)
+    if final_check.get("logged_in") or was_logged_in:
+        print(f"✅ Active Wolt session saved successfully for User: {user_id or 'Default'}!")
+        print("👉 Run this command to sync the session to your Raspberry Pi:")
+        sync_cmd = f"python scripts/deploy_pi.py sync-profile" + (f" --user {user_id}" if user_id else "")
+        print(f"   {sync_cmd}\n")
+    else:
+        print("⚠️ [WARNING] No active login was detected in this session.")
+        print("   Make sure you clicked 'Log in' and verified your Wolt account before closing the window.")
+        print("   To try again: python wolt_manager.py login" + (f" --user {user_id}" if user_id else ""))
