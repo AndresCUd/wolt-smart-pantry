@@ -67,11 +67,40 @@ def logs(host=DEFAULT_HOST, user=DEFAULT_USER, lines=30):
     logs_cmd = f"journalctl -u {SERVICE_NAME} -n {lines} --no-pager"
     return run_ssh(logs_cmd, host=host, user=user)
 
+def sync_profile(user_id=None, host=DEFAULT_HOST, user=DEFAULT_USER, remote_dir=REMOTE_DIR):
+    """Syncs the authenticated Wolt browser profile from PC to Raspberry Pi over SCP."""
+    if user_id:
+        local_profile = os.path.join("data", "users", str(user_id), ".wolt_profile")
+        remote_target_dir = f"{remote_dir}/data/users/{user_id}"
+    else:
+        local_profile = ".wolt_profile"
+        remote_target_dir = remote_dir
+
+    if not os.path.exists(local_profile):
+        print(f"[!] Local profile directory not found at: {local_profile}")
+        print("    Run 'python wolt_manager.py login" + (f" --user {user_id}'" if user_id else "'") + " first on your PC.")
+        return 1
+
+    print(f"[*] Preparing remote directory on {user}@{host}:{remote_target_dir}...")
+    run_ssh(f"mkdir -p {remote_target_dir}", host=host, user=user)
+
+    remote_dest = f"{user}@{host}:{remote_target_dir}/"
+    print(f"[*] Copying {local_profile} -> {remote_dest}...")
+    scp_cmd = ["scp", "-r", local_profile, remote_dest]
+    res = subprocess.run(scp_cmd)
+    if res.returncode == 0:
+        print(f"[+] Wolt profile synced successfully to Raspberry Pi!")
+        print(f"[*] Restarting '{SERVICE_NAME}' service on Pi to apply active session...")
+        run_ssh(f"sudo systemctl restart {SERVICE_NAME}", host=host, user=user)
+        print("[+] Done! Check with: python scripts/deploy_pi.py logs")
+    return res.returncode
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Raspberry Pi Deployment & SSH Manager")
-    parser.add_argument("action", choices=["deploy", "status", "logs", "setup-key", "setup-sudo", "exec"], default="deploy", nargs="?", help="Action to perform")
+    parser.add_argument("action", choices=["deploy", "status", "logs", "setup-key", "setup-sudo", "exec", "sync-profile"], default="deploy", nargs="?", help="Action to perform")
+    parser.add_argument("--user-id", "--user", dest="target_user_id", type=int, help="Telegram User ID (e.g. 7249779280) for profile synchronization")
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"Raspberry Pi IP / Hostname (default: {DEFAULT_HOST})")
-    parser.add_argument("--user", default=DEFAULT_USER, help=f"Raspberry Pi SSH User (default: {DEFAULT_USER})")
+    parser.add_argument("--rpi-user", default=DEFAULT_USER, help=f"Raspberry Pi SSH User (default: {DEFAULT_USER})")
     parser.add_argument("--dir", default=REMOTE_DIR, help=f"Remote repository path (default: {REMOTE_DIR})")
     parser.add_argument("--cmd", help="Custom command to run on Pi (for 'exec' action)")
     parser.add_argument("-n", "--lines", type=int, default=30, help="Number of journal log lines to display")
@@ -79,17 +108,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.action == "setup-key":
-        sys.exit(copy_ssh_key(host=args.host, user=args.user))
+        sys.exit(copy_ssh_key(host=args.host, user=args.rpi_user))
     elif args.action == "setup-sudo":
-        sys.exit(setup_sudo(host=args.host, user=args.user))
+        sys.exit(setup_sudo(host=args.host, user=args.rpi_user))
     elif args.action == "deploy":
-        sys.exit(deploy(host=args.host, user=args.user, remote_dir=args.dir))
+        sys.exit(deploy(host=args.host, user=args.rpi_user, remote_dir=args.dir))
     elif args.action == "status":
-        sys.exit(status(host=args.host, user=args.user))
+        sys.exit(status(host=args.host, user=args.rpi_user))
     elif args.action == "logs":
-        sys.exit(logs(host=args.host, user=args.user, lines=args.lines))
+        sys.exit(logs(host=args.host, user=args.rpi_user, lines=args.lines))
+    elif args.action == "sync-profile":
+        sys.exit(sync_profile(user_id=args.target_user_id, host=args.host, user=args.rpi_user, remote_dir=args.dir))
     elif args.action == "exec":
         if not args.cmd:
             print("[!] Please specify --cmd '<command>'")
             sys.exit(1)
-        sys.exit(run_ssh(args.cmd, host=args.host, user=args.user))
+        sys.exit(run_ssh(args.cmd, host=args.host, user=args.rpi_user))
