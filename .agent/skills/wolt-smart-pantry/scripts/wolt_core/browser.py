@@ -765,21 +765,25 @@ def check_wolt_session(user_id=None, headless=None) -> dict:
                 viewport={"width": 1280, "height": 850}
             )
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto("https://wolt.com/en/discovery", wait_until="domcontentloaded", timeout=25000)
-            time.sleep(2.5)
+            page.goto("https://wolt.com/en/me", wait_until="domcontentloaded", timeout=25000)
+            time.sleep(2)
             
-            login_btn = page.locator("button:has-text('Log in'), button:has-text('Logi sisse'), button[data-test-id*='login']").first
-            user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
-            
-            if user_menu.is_visible(timeout=1500):
+            # Wolt redirects logged-out users to /discovery. Logged-in users stay on /me
+            current_url = page.url.lower()
+            if "/me" in current_url or "/profile" in current_url or "/settings" in current_url:
                 status["logged_in"] = True
-            elif login_btn.is_visible(timeout=1500):
-                status["logged_in"] = False
             else:
-                cookies = context.cookies()
-                has_auth = any("token" in c.get("name", "").lower() or "session" in c.get("name", "").lower() or "wolt" in c.get("name", "").lower() for c in cookies)
-                status["logged_in"] = has_auth
-                
+                user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
+                login_btn = page.locator("button:has-text('Log in'), button:has-text('Logi sisse'), button[data-test-id*='login']").first
+                if user_menu.is_visible(timeout=1500):
+                    status["logged_in"] = True
+                elif login_btn.is_visible(timeout=1500):
+                    status["logged_in"] = False
+                else:
+                    cookies = context.cookies()
+                    has_auth = any("token" in c.get("name", "").lower() or "session" in c.get("name", "").lower() or "wauth" in c.get("name", "").lower() for c in cookies)
+                    status["logged_in"] = has_auth
+                    
             context.close()
         except Exception as e:
             status["error"] = str(e)
@@ -792,19 +796,16 @@ def login_mode(user_id=None):
     print(f"[*] Launching persistent browser profile at: {user_browser_dir}")
     with sync_playwright() as p:
         args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage"]
-        ignore_default = ["--enable-automation"]
         context = None
         try:
             context = p.chromium.launch_persistent_context(
                 user_data_dir=user_browser_dir,
                 headless=False,
                 args=args,
-                ignore_default_args=ignore_default,
                 viewport={"width": 1280, "height": 850}
             )
         except Exception as e:
-            print(f"[!] Initial browser launch encountered error: {e}")
-            print("[*] Cleaning stale locks and corrupted cache in profile...")
+            print(f"[!] Browser launch encountered error: {e}. Clearing stale locks...")
             for root_dir, _, files in os.walk(user_browser_dir):
                 for f in files:
                     if f in ["LOCK", "SingletonLock", "SingletonSocket", "SingletonCookie"] or f.endswith(".pma"):
@@ -812,90 +813,33 @@ def login_mode(user_id=None):
                             os.remove(os.path.join(root_dir, f))
                         except Exception:
                             pass
-            try:
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_browser_dir,
-                    headless=False,
-                    args=args,
-                    ignore_default_args=ignore_default,
-                    viewport={"width": 1280, "height": 850}
-                )
-            except Exception as e2:
-                print(f"[!] Re-initializing clean browser profile due to: {e2}")
-                try:
-                    shutil.rmtree(user_browser_dir, ignore_errors=True)
-                    os.makedirs(user_browser_dir, exist_ok=True)
-                except Exception:
-                    pass
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=user_browser_dir,
-                    headless=False,
-                    args=args,
-                    ignore_default_args=ignore_default,
-                    viewport={"width": 1280, "height": 850}
-                )
+            context = p.chromium.launch_persistent_context(
+                user_data_dir=user_browser_dir,
+                headless=False,
+                args=args,
+                viewport={"width": 1280, "height": 850}
+            )
 
-        try:
-            context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        except Exception:
-            pass
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://wolt.com/en/discovery", wait_until="domcontentloaded")
         
-        # Try to automatically accept GDPR cookie banner to unblock login button
-        time.sleep(1.5)
-        try:
-            accept_btn = page.locator("button:has-text('Allow'), button:has-text('Nõustu'), button:has-text('Accept'), button:has-text('Aceptar'), button[data-test-id*='cookie-accept']").first
-            if accept_btn.is_visible(timeout=2000):
-                accept_btn.click()
-        except Exception:
-            pass
-
         print("\n" + "="*60)
         print(">>> ONE-TIME AUTHENTICATION SETUP:")
         if user_id:
             print(f">>> Telegram User Profile: {user_id}")
-        print("1. Click 'Log in' / 'Logi sisse' in the opened browser window.")
-        print("2. Enter your email (Gmail) or phone number to receive Wolt's code.")
-        print("   💡 TIP: Use 'Continue with email' or phone number instead of Google button.")
-        print("3. Confirm your default delivery address.")
-        print("4. When finished and logged in, CLOSE the browser window.")
+        print("1. Log in to your Wolt account (Google, Apple, email, or phone SMS).")
+        print("2. Confirm your default delivery address.")
+        print("3. When finished, simply CLOSE the browser window.")
         print("="*60 + "\n")
         
-        was_logged_in = False
-        while True:
-            try:
-                if not context.pages or page.is_closed():
-                    break
-                user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
-                if not was_logged_in and user_menu.is_visible(timeout=500):
-                    was_logged_in = True
-                    print("\n🎉 [SUCCESS] Wolt login detected! Your session cookies are active.")
-                    print(">>> You can now close the browser window.\n")
-                time.sleep(1)
-            except Exception:
-                break
+        try:
+            page.wait_for_event("close", timeout=0)
+        except Exception:
+            pass
             
-        print("[*] Browser window closed.")
-        if not was_logged_in:
-            try:
-                cookies = context.cookies()
-                was_logged_in = any("token" in c.get("name", "").lower() or "session" in c.get("name", "").lower() for c in cookies)
-            except Exception:
-                pass
+        time.sleep(2)
+        print("[+] Browser window closed. Session saved successfully!")
         try:
             context.close()
         except Exception:
             pass
-
-    # OUTSIDE with sync_playwright(): Now safe to run final verification
-    final_check = check_wolt_session(user_id=user_id, headless=True)
-    if final_check.get("logged_in") or was_logged_in:
-        print(f"✅ Active Wolt session saved successfully for User: {user_id or 'Default'}!")
-        print("👉 Run this command to sync the session to your Raspberry Pi:")
-        sync_cmd = f"python scripts/deploy_pi.py sync-profile" + (f" --user {user_id}" if user_id else "")
-        print(f"   {sync_cmd}\n")
-    else:
-        print("⚠️ [WARNING] No active login was detected in this session.")
-        print("   Make sure you clicked 'Log in' and verified your Wolt account before closing the window.")
-        print("   To try again: python wolt_manager.py login" + (f" --user {user_id}" if user_id else ""))
