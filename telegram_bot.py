@@ -86,6 +86,8 @@ logging.basicConfig(
     handlers=log_handlers
 )
 logger = logging.getLogger("TelegramBot")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Config
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
