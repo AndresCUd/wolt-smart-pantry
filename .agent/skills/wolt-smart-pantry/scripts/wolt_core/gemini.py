@@ -483,7 +483,26 @@ Respond ONLY with a valid JSON object matching this schema:
 }
 """
 
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-flash-latest"]
+    def _optimize_image_for_vision(src_path: str, max_dim=1280, quality=85) -> tuple[bytes, str]:
+        """Compresses and scales high-res smartphone images to ~150KB to prevent network timeouts."""
+        try:
+            from PIL import Image, ImageOps
+            import io
+            with Image.open(src_path) as img:
+                try:
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass
+                img = img.convert("RGB")
+                img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality, optimize=True)
+                return buf.getvalue(), "image/jpeg"
+        except Exception:
+            with open(src_path, "rb") as f:
+                return f.read(), "image/jpeg"
+
+    models_to_try = ["gemini-2.0-flash", "gemini-1.5-flash"]
     last_error = ""
 
     # Strategy 1: Official Google GenAI SDK (v1)
@@ -491,8 +510,10 @@ Respond ONLY with a valid JSON object matching this schema:
         try:
             from google import genai
             from PIL import Image
+            import io
             client = genai.Client(api_key=api_key)
-            pil_img = Image.open(image_path)
+            img_bytes, _ = _optimize_image_for_vision(image_path)
+            pil_img = Image.open(io.BytesIO(img_bytes))
             resp = client.models.generate_content(
                 model=model_name,
                 contents=[prompt, pil_img]
@@ -509,13 +530,15 @@ Respond ONLY with a valid JSON object matching this schema:
             last_error = str(e)
 
     # Strategy 2: Legacy google.generativeai SDK
-    for model_name in ["gemini-1.5-flash", "gemini-1.5-pro"]:
+    for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
         try:
             import google.generativeai as legacy_genai
             from PIL import Image
+            import io
             legacy_genai.configure(api_key=api_key)
             model = legacy_genai.GenerativeModel(model_name)
-            pil_img = Image.open(image_path)
+            img_bytes, _ = _optimize_image_for_vision(image_path)
+            pil_img = Image.open(io.BytesIO(img_bytes))
             resp = model.generate_content([prompt, pil_img])
             if resp and resp.text:
                 clean = resp.text.strip()
@@ -530,13 +553,11 @@ Respond ONLY with a valid JSON object matching this schema:
 
     # Strategy 3: Direct HTTP REST API via v1beta endpoint (Zero external dependencies)
     import base64
-    import mimetypes
     try:
-        mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
-        with open(image_path, "rb") as f:
-            b64_img = base64.b64encode(f.read()).decode("utf-8")
+        img_bytes, mime_type = _optimize_image_for_vision(image_path)
+        b64_img = base64.b64encode(img_bytes).decode("utf-8")
 
-        for model_name in models_to_try:
+        for model_name in ["gemini-2.0-flash", "gemini-1.5-flash"]:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
                 payload = {
@@ -557,7 +578,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 }
                 req_data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=30) as response:
+                with urllib.request.urlopen(req, timeout=45) as response:
                     res_body = json.loads(response.read().decode("utf-8"))
                     candidates = res_body.get("candidates", [])
                     if candidates:
