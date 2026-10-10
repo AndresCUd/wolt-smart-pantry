@@ -118,7 +118,15 @@ if __name__ == "__main__":
     elif args.action == "logs":
         sys.exit(logs(host=args.host, user=args.rpi_user, lines=args.lines))
     elif args.action == "sync-profile":
-        sys.exit(sync_profile(user_id=args.target_user_id, host=args.host, user=args.rpi_user, remote_dir=args.dir))
+        uid = args.target_user_id
+        if not uid:
+            users_dir = os.path.join("data", "users")
+            if os.path.exists(users_dir):
+                active = [d for d in os.listdir(users_dir) if d.isdigit()]
+                if len(active) == 1:
+                    uid = int(active[0])
+                    print(f"[*] Auto-detected active Telegram User ID: {uid}")
+        sys.exit(sync_profile(user_id=uid, host=args.host, user=args.rpi_user, remote_dir=args.dir))
     elif args.action == "exec":
         if not args.cmd:
             print("[!] Please specify --cmd '<command>'")

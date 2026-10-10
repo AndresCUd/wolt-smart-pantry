@@ -112,6 +112,11 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     user_id = args.user
+    if not user_id:
+        active_u = list_active_users()
+        if len(active_u) == 1:
+            user_id = active_u[0]
+            print(f"[*] Auto-detected single active Telegram User Profile: {user_id}")
     
     if args.mode == "login":
         login_mode(user_id=user_id)

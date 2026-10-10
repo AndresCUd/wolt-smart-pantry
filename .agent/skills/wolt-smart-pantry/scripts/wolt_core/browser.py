@@ -834,22 +834,53 @@ def login_mode(user_id=None):
         page = context.pages[0] if context.pages else context.new_page()
         page.goto("https://wolt.com/en/discovery", wait_until="domcontentloaded")
         
+        # Try to automatically accept GDPR cookie banner to unblock login button
+        time.sleep(1.5)
+        try:
+            accept_btn = page.locator("button:has-text('Allow'), button:has-text('Nõustu'), button:has-text('Accept'), button:has-text('Aceptar'), button[data-test-id*='cookie-accept']").first
+            if accept_btn.is_visible(timeout=2000):
+                accept_btn.click()
+        except Exception:
+            pass
+
         print("\n" + "="*60)
         print(">>> ONE-TIME AUTHENTICATION SETUP:")
         if user_id:
             print(f">>> Telegram User Profile: {user_id}")
-        print("1. Log in to your Wolt account in the opened browser window.")
-        print("2. Confirm your default delivery address.")
-        print("3. When finished, simply CLOSE the browser window.")
+        print("1. Click 'Log in' / 'Logi sisse' in the opened browser window.")
+        print("2. Enter your phone number or email and enter the verification code.")
+        print("3. Confirm your default delivery address.")
+        print("4. When finished, CLOSE the browser window.")
         print("="*60 + "\n")
         
-        try:
-            page.wait_for_event("close", timeout=0)
-        except Exception:
-            pass
+        was_logged_in = False
+        while True:
+            try:
+                if not context.pages or page.is_closed():
+                    break
+                user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
+                if not was_logged_in and user_menu.is_visible(timeout=500):
+                    was_logged_in = True
+                    print("\n🎉 [SUCCESS] Wolt login detected! Your session cookies are active.")
+                    print(">>> You can now close the browser window.\n")
+                time.sleep(1)
+            except Exception:
+                break
             
-        print("[+] Browser window closed. Session saved successfully!")
+        print("[*] Browser window closed.")
         try:
             context.close()
         except Exception:
             pass
+
+        # Final verification
+        final_check = check_wolt_session(user_id=user_id, headless=True)
+        if final_check.get("logged_in"):
+            print(f"✅ Active Wolt session saved successfully for User: {user_id or 'Default'}!")
+            print("👉 Run this command to sync the session to your Raspberry Pi:")
+            sync_cmd = f"python scripts/deploy_pi.py sync-profile" + (f" --user {user_id}" if user_id else "")
+            print(f"   {sync_cmd}\n")
+        else:
+            print("⚠️ [WARNING] No active login was detected in this session.")
+            print("   Make sure you clicked 'Log in' and verified your Wolt account before closing the window.")
+            print("   To try again: python wolt_manager.py login" + (f" --user {user_id}" if user_id else ""))
