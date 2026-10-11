@@ -544,10 +544,20 @@ Analyze the provided photo with high precision.
 
 Determine:
 1. What type of photo is this?
-   - "groceries_restock": Freshly bought groceries, supermarket food packaging, items on a counter/table, pantry shelf, fridge/freezer contents, or shopping receipt.
+   - "wolt_receipt": Digital screenshot of a Wolt order, Wolt app order history/receipt, email receipt, supermarket paper receipt, or delivery invoice listing grocery items.
+   - "groceries_restock": Freshly bought groceries, supermarket food packaging, items on a counter/table, pantry shelf, or fridge/freezer contents.
    - "cooked_meal": A prepared/cooked meal plate or bowl ready to eat (e.g. breakfast scramble, steak with veggies, salad).
 
-2. If it is "groceries_restock":
+2. If it is "wolt_receipt":
+   - Parse each purchased grocery line item name, purchase multiplier/quantity (e.g. 1x, 2x, x2, 1 tk), package size, and unit.
+   - EXCLUDE non-food or auxiliary lines: delivery fee (kohalevedu), service fee (teenustasu), paper bag fee (kott), courier tip, subtotal, total amount.
+   - Normalize product names clearly in Estonian or English (e.g., "Eggo suured munad L 10tk", "Rakvere toorsuitsupeekon 150g", "Dolce Gusto Café Au Lait kapslid").
+   - detected_items: Itemized list of every purchased grocery product with exact purchased quantities.
+     Format: [{"name": "<Specific Product Name>", "qty": <int or float>, "unit": "<pack | pcs | slices | g | kg | bottle | box>", "category": "protein" | "produce" | "staple" | "dairy"}]
+   - dish_title: "Wolt Order Receipt Restock"
+   - chef_notes: Short summary of receipt items and total items counted.
+
+3. If it is "groceries_restock":
    - Inspect every visible package, bag, carton, bottle, fruit, vegetable, or container.
    - Read packaging labels (in English or Estonian, e.g. Tallegg broilerifilee, kanafilee, hakkliha, riivjuust, juust, piim, munad, tortiljad, avokaado, banaan, sidrun/lemon juice).
    - detected_items: Itemized list of every distinct food product with realistic counts or packages.
@@ -555,7 +565,7 @@ Determine:
    - dish_title: Summary description, e.g. "Fridge Grocery Restock" or "Kitchen Inventory Audit".
    - chef_notes: Short summary of detected items.
 
-3. If it is "cooked_meal":
+4. If it is "cooked_meal":
    - meal_type: "breakfast", "lunch", "dinner", or "snack".
    - dish_title: Concise culinary title of the prepared meal.
    - detected_items: Raw ingredients in this dish with realistic weights/quantities for 1-2 servings.
@@ -563,7 +573,7 @@ Determine:
 
 Respond ONLY with a valid JSON object matching this schema:
 {
-  "photo_type": "groceries_restock" | "cooked_meal",
+  "photo_type": "wolt_receipt" | "groceries_restock" | "cooked_meal",
   "dish_title": "<string>",
   "meal_type": "breakfast" | "lunch" | "dinner" | "snack" | null,
   "detected_items": [
@@ -742,6 +752,63 @@ Respond ONLY with a valid JSON object matching this schema:
         "detected_items": [],
         "photo_type": "unknown"
     }
+
+def parse_receipt_text_with_ai(receipt_text: str, api_key: str = None, user_id=None) -> list[dict]:
+    """Parses pasted text from a Wolt receipt, order confirmation, or email into structured grocery items."""
+    if not receipt_text or not receipt_text.strip():
+        return []
+    
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
+
+    prompt = f"""
+You are an expert grocery receipt parser for Wolt and Estonian supermarkets.
+Parse the following Wolt receipt or grocery order text into a structured JSON list of food products:
+
+\"\"\"{receipt_text}\"\"\"
+
+Rules:
+1. Extract only grocery / food products with their purchase quantity (e.g., 1, 2, 7).
+2. Ignore delivery fees, bag fees (kott), service fees, tips, payment method lines, or totals.
+3. Categorize each item as: "protein", "produce", "dairy", or "staple".
+4. Return ONLY a valid JSON array of objects with schema:
+[
+  {{
+    "name": "<Product Name in Estonian or English>",
+    "qty": <number>,
+    "unit": "<pack | pcs | g | kg | bottle | box | null>",
+    "category": "<protein | produce | staple | dairy>"
+  }}
+]
+"""
+    if api_key:
+        try:
+            raw = call_gemini_api(prompt, api_key=api_key, json_mode=True)
+            if raw:
+                m = re.search(r'\[.*\]', raw, re.DOTALL)
+                if m:
+                    parsed = json.loads(m.group(0))
+                    if isinstance(parsed, list) and parsed:
+                        return parsed
+        except Exception:
+            pass
+
+    # Deterministic fallback parsing (e.g. lines like '2x Milk', 'Eggo munad x1', 'Bread - 1')
+    results = []
+    lines = [l.strip() for l in receipt_text.split('\n') if l.strip()]
+    for line in lines:
+        if any(ign in line.lower() for ign in ["total", "subtotal", "fee", "kohalevedu", "teenustasu", "delivery", "tip", "kott", "kuller"]):
+            continue
+        q_match = re.search(r'(?:^|[\s(])(?:x\s*(\d+)|\b(\d+)\s*x|\b(\d+)\s*(?:tk|pcs|pk|pack))\b', line, re.IGNORECASE)
+        qty = int(q_match.group(1) or q_match.group(2) or q_match.group(3)) if q_match else 1
+        clean_name = re.sub(r'(?:^|[\s(])(?:x\s*\d+|\b\d+\s*x|\b\d+\s*(?:tk|pcs|pk|pack))\b', '', line, flags=re.IGNORECASE)
+        clean_name = re.sub(r'\d+[.,]\d{2}\s*€|€\s*\d+[.,]\d{2}', '', clean_name).strip(' -•*,:;')
+        if clean_name and len(clean_name) > 1:
+            name_low = clean_name.lower()
+            cat = "protein" if any(w in name_low for w in ["muna", "egg", "kana", "hakkliha", "veis", "peekon", "bacon", "kala"]) else ("produce" if any(w in name_low for w in ["tomat", "kurk", "paprika", "banaan", "sibul", "avokaado"]) else "staple")
+            results.append({"name": clean_name.title(), "qty": qty, "unit": "pack", "category": cat})
+    return results
 
 def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None, user_suggestions: str = None) -> dict:
     """Generates a fully dynamic 7-day culinary meal plan using Gemini based on in-stock ingredients, preferences, and user suggestions."""

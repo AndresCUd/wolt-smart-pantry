@@ -497,6 +497,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/pref` - Manage your allergies, disliked ingredients, and household size.\n"
         "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent stock.\n"
         "• `/stock` - Restock items manually (`/stock eggs 10`) or upload a photo with caption `/stock`.\n"
+        "• `/receipt` - Restock pantry from a Wolt receipt photo/screenshot or text (`/receipt 1x Eggs, 2x Bacon`).\n"
         "• `/deals` - Scans Wolt Market for active promotional discounts.\n"
         "• `/cart Item:Qty Item:Qty` - Adds specific items directly (e.g. `/cart Banaan:6 Rukola:1`).\n"
         "• `/wolt` - Check your user's isolated Wolt session status.\n"
@@ -1531,14 +1532,54 @@ async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply_safe(update, context, f"✅ *Stock Updated:* `{item_name.capitalize()}` is now set to **{qty_val}** in your pantry memory.")
 
 @auth_guard
+async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Updates virtual pantry inventory directly from a Wolt receipt photo or pasted text."""
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args if context.args else []
+
+    if not args:
+        help_text = (
+            "🧾 *Update Pantry From Wolt Receipt*\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "You can update your pantry inventory directly from your Wolt orders in two ways:\n\n"
+            "1. 📸 **Photo / Screenshot:**\n"
+            "   Send or forward a screenshot/photo of your Wolt app receipt, order confirmation, or delivery slip with the caption `/receipt`.\n\n"
+            "2. 📝 **Paste Text:**\n"
+            "   Send `/receipt` followed by your order items or pasted receipt text:\n"
+            "   `• /receipt 1x Eggo munad L, 2x Rakvere toorsuitsupeekon, 1x Dolce Gusto kapslid`\n"
+            "   `• /receipt 7x Banaan, 2x Punane paprika, 1x Rukola 100g`\n\n"
+            "💡 *The bot will automatically recognize items & quantities and add them to your pantry memory!*"
+        )
+        await reply_safe(update, context, help_text)
+        return
+
+    receipt_text = " ".join(args).strip()
+    msg = await reply_safe(update, context, "🧾 Parsing Wolt receipt & updating pantry memory...")
+    
+    from wolt_core.gemini import parse_receipt_text_with_ai
+    items = await asyncio.to_thread(parse_receipt_text_with_ai, receipt_text, None, user_id)
+    if not items:
+        await edit_safe(msg, "⚠️ *No items could be extracted from the receipt text.*\n\nTry sending items in this format:\n`/receipt 1x Eggo munad L, 2x Rakvere peekon, 1x Dolce Gusto kohvikapslid`")
+        return
+
+    restock_text, added = restock_pantry_from_detected_items(items, source="wolt_receipt_text", user_id=user_id)
+    restock_text = restock_text.replace("📦 *Pantry Restock Successful!*", "🧾 *Wolt Receipt Processed & Pantry Updated!*")
+    keyboard = [
+        [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
+        [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
+    ]
+    await edit_safe(msg, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+@auth_guard
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles uploaded meal plates or grocery restock photos with vision AI analysis."""
+    """Handles uploaded meal plates, Wolt receipts, or grocery restock photos with vision AI analysis."""
     if not update.message or not update.message.photo:
         return
     user_id = update.effective_user.id if update.effective_user else 0
     photo = update.message.photo[-1]
     caption = (update.message.caption or "").strip()
-    is_stock_caption = "/stock" in caption.lower() or caption.lower().startswith("stock") or "restock" in caption.lower()
+    is_receipt = any(w in caption.lower() for w in ["/receipt", "receipt", "recibo", "wolt", "tšekk", "factura", "order", "pedido", "invoice"])
+    is_stock_caption = is_receipt or "/stock" in caption.lower() or caption.lower().startswith("stock") or "restock" in caption.lower()
 
     msg = await reply_safe(update, context, "📸 Analyzing photo with culinary vision AI & checking pantry memory...")
     
@@ -1583,7 +1624,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg,
             "🔍 *No se detectaron productos en la imagen.*\n\n"
             "Asegúrate de que los alimentos o empaques sean visibles y cuenten con buena iluminación.\n"
-            "También puedes añadir stock manualmente con `/stock <producto> <cantidad>`."
+            "También puedes añadir stock manualmente con `/stock <producto> <cantidad>` o `/receipt`."
         )
         return
 
@@ -1594,9 +1635,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     notes = res.get("chef_notes", "")
     photo_type = res.get("photo_type", "cooked_meal")
     
-    # If the user explicitly supplied /stock in caption or if detected as grocery restock:
-    if is_stock_caption or photo_type == "groceries_restock":
-        restock_text, added_summary = restock_pantry_from_detected_items(items, source="photo_stock_caption", photo_path=save_path, user_id=user_id)
+    # If the user explicitly supplied /stock or /receipt in caption, or if vision detected wolt_receipt / grocery restock:
+    if is_stock_caption or photo_type in ["wolt_receipt", "groceries_restock"]:
+        source_name = "wolt_receipt" if (is_receipt or photo_type == "wolt_receipt") else "photo_stock_caption"
+        restock_text, added_summary = restock_pantry_from_detected_items(items, source=source_name, photo_path=save_path, user_id=user_id)
+        if is_receipt or photo_type == "wolt_receipt":
+            restock_text = restock_text.replace("📦 *Pantry Restock Successful!*", "🧾 *Wolt Receipt Processed & Pantry Updated!*")
         keyboard = [
             [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
             [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
@@ -2655,6 +2699,7 @@ async def post_init(application):
         BotCommand("pref", "👤 Dietary profile, allergies & household size"),
         BotCommand("pantry", "🏠 View virtual pantry memory & stock"),
         BotCommand("stock", "📦 Adjust ingredient stock (/stock eggs 10)"),
+        BotCommand("receipt", "🧾 Restock pantry from Wolt receipt (photo or text)"),
         BotCommand("deals", "🏷️ Scan live discount deals on Wolt"),
         BotCommand("cart", "🛒 Build Wolt cart directly (/cart Banaan:6)"),
         BotCommand("wolt", "🛍️ Check isolated Wolt browser session"),
@@ -2717,6 +2762,7 @@ def main():
     app.add_handler(CommandHandler("setjev", setjev_command))
     app.add_handler(CommandHandler("stock", setstock_command))
     app.add_handler(CommandHandler("eggs", setstock_command))
+    app.add_handler(CommandHandler(["receipt", "recibo", "invoice"], receipt_command))
     app.add_handler(CommandHandler("preferences", preferences_command))
     app.add_handler(CommandHandler("pref", preferences_command))
     app.add_handler(CommandHandler("pantry", pantry_command))
@@ -2726,7 +2772,7 @@ def main():
     app.add_handler(CommandHandler("wolt", wolt_command))
     app.add_handler(CommandHandler("store", store_command))
     app.add_handler(CommandHandler("logs", logs_command))
-    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     app.add_handler(CallbackQueryHandler(button_callback_handler))
 
