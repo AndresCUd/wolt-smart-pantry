@@ -929,6 +929,18 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             save_user_preferences(prefs, user_id=user_id)
             await reply_safe(update, context, f"✅ *Preferred Coffee Updated:*\n`{val.strip()}`\n\nYour weekly meal plans and Wolt grocery baskets will now automatically include this coffee!")
             return
+        elif subcmd in ["onion", "sibul", "sibula", "cebolla"]:
+            val_low = val.strip().lower()
+            if any(w in val_low for w in ["green", "roheline", "kevad", "scallion", "cebollin", "larga"]):
+                chosen_onion = "Roheline sibul 100g"
+                onion_label = "Green Onion / Roheline sibul (Scallions)"
+            else:
+                chosen_onion = "Kollane sibul 1kg"
+                onion_label = "Yellow Bulb Onion / Kollane sibul (Mugulsibul)"
+            prefs["preferred_onion"] = chosen_onion
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Preferred Onion Updated:*\n`{onion_label}`\n\nYour weekly grocery lists and recipes will now use {onion_label}!")
+            return
         elif subcmd in ["allergy", "allergies"]:
             new_allergies = [a.strip() for a in val.split(",") if a.strip()]
             prefs["allergies"] = new_allergies
@@ -960,6 +972,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
                 "breakfast_preference": "",
                 "preferred_coffee": "Dolce Gusto Café Au Lait kohvikapslid",
+                "preferred_onion": "Roheline sibul 100g",
                 "household_size": 1,
                 "notes": ""
             }
@@ -970,18 +983,21 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Show current preferences
     b_display = prefs.get('breakfast_preference') or 'Standard (Scrambles & Omelettes)'
     c_display = prefs.get('preferred_coffee') or 'Dolce Gusto Café Au Lait kohvikapslid'
+    o_display = prefs.get('preferred_onion') or 'Roheline sibul 100g'
     text = (
         "👤 *Your Dietary Profile & Preferences:*\n\n"
         f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
         f"• *Household Size:* `{prefs.get('household_size', 1)} person(s)`\n"
         f"• *Custom Breakfast:* `{b_display}`\n"
         f"• *Preferred Coffee:* `{c_display}`\n"
+        f"• *Preferred Onion:* `{o_display}`\n"
         f"• *Allergies:* `{', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}`\n"
         f"• *Avoided Foods:* `{', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}`\n"
         f"• *Preferred Proteins:* `{', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}`\n\n"
         "💡 *How to update from Telegram:*\n"
         "• `/pref breakfast 1 fried egg + 2 slices of bacon + bread/pancakes + coffee`\n"
         "• `/pref coffee Dolce Gusto Café Au Lait kohvikapslid`\n"
+        "• `/pref onion green` _(or yellow / kollane sibul)_\n"
         "• `/pref allergy peanuts, shellfish, lactose`\n"
         "• `/pref avoid mushrooms, eggplant`\n"
         "• `/pref diet high-protein` _(or pescatarian, vegetarian, vegan)_\n"

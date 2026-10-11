@@ -86,8 +86,6 @@ def get_candidate_grocery_list(prefs: dict, user_id=None, suggestions: str = Non
         if any(w in b_pref for w in ["avocado", "avokaado", "aguacate"]):
             avocado_packs = max(1, int(round((4 * h_size) / 2)))
             items.append(("Avokaado 2tk", avocado_packs))
-            
-        items.append(("Kollane sibul 1kg", 1))
     else:
         # Standard default baseline
         egg_packs = max(1, int(round((14 * h_size) / 10)))
@@ -97,8 +95,24 @@ def get_candidate_grocery_list(prefs: dict, user_id=None, suggestions: str = Non
             ("Muna L 10tk", egg_packs),
             ("Eesti Pagar Tosta röstsai", bread_packs),
             ("Avokaado 2tk", avocado_packs),
-            ("Kollane sibul 1kg", 1),
         ]
+
+    # Check onion preference and pantry memory
+    pref_onion = (prefs.get("preferred_onion") or "").lower()
+    wants_green_onion = any(w in b_pref or w in pref_onion for w in ["green onion", "roheline sibul", "kevadsibul", "scallion", "cebollin", "cebolla larga", "chives"])
+    
+    # Check pantry stock to avoid re-buying onions if already in stock
+    pantry = load_pantry_memory(user_id=user_id) if user_id else {}
+    pantry_all = []
+    for cat in ["produce", "staples", "proteins"]:
+        for p_it in pantry.get(cat, []):
+            if p_it.get("qty", 0) > 0:
+                pantry_all.append(p_it.get("name", "").lower())
+                
+    has_pantry_onion = any(any(w in name for w in ["sibul", "onion", "cebolla", "scallion"]) for name in pantry_all)
+    if not has_pantry_onion:
+        chosen_onion = "Roheline sibul 100g" if wants_green_onion else "Kollane sibul 1kg"
+        items.append((chosen_onion, 1))
 
     # 2. Proteins by Diet Type
     prot_packs = max(1, int(2 * h_size))
@@ -231,6 +245,10 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
     else:
         coffee_ingredient = "Dolce Gusto Café Au Lait" if "dolce" in coffee_pref.lower() else coffee_pref.split("kohvikapslid")[0].strip()
 
+    pref_onion = (prefs.get("preferred_onion") or "").lower()
+    wants_green_onion = any(w in b_pref.lower() or w in pref_onion for w in ["green onion", "roheline sibul", "kevadsibul", "scallion", "cebollin", "cebolla larga", "chives"])
+    onion_ingredient = "Fresh green onions (scallions)" if wants_green_onion else "Diced onions"
+
     for idx, (day_name, tier, alert) in enumerate(day_configs):
         if b_pref:
             b_low = b_pref.lower()
@@ -282,8 +300,8 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
                 breakfast = {
                     "title": "Sunday Country Bacon & Egg Skillet with Fresh Coffee",
                     "protein_raw": f"{2 * h_size} Farm eggs + {2 * h_size} Slices bacon",
-                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon", "Cherry tomatoes", "Onions", coffee_ingredient],
-                    "tip": f"🍳 **Skillet Frittata:** Sauté chopped bacon with onions and sweet cherry tomatoes until fragrant. Pour whisked eggs over, cover for 4 mins on low heat until set. Serve with {coffee_ingredient}."
+                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon", "Cherry tomatoes", onion_ingredient, coffee_ingredient],
+                    "tip": f"🍳 **Skillet Frittata:** Sauté chopped bacon with {onion_ingredient.lower()} and sweet cherry tomatoes until fragrant. Pour whisked eggs over, cover for 4 mins on low heat until set. Serve with {coffee_ingredient}."
                 }
         elif idx == 0:
             breakfast = {

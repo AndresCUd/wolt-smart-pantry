@@ -247,6 +247,46 @@ def get_store_search_input(page):
             continue
     return None
 
+def extract_product_card_title(el, raw_text: str = "") -> str:
+    """
+    Extracts the true product title from a Wolt item card, avoiding badge labels
+    like 'Popular', '5 left', '-20%', 'Deal', etc.
+    """
+    try:
+        title_el = el.locator(
+            "h3, [data-test-id*='item-card-header'], [data-test-id*='product-title'], [data-test-id*='horizontal-item-card-header']"
+        ).first
+        if title_el.is_visible(timeout=80):
+            t = title_el.inner_text().strip()
+            if t and len(t) > 1 and not any(re.match(p, t, re.IGNORECASE) for p in [r'^\d+\s*left$', r'^popular$', r'^-?\d+%$']):
+                return t
+    except Exception:
+        pass
+
+    badge_patterns = [
+        r'^\d+\s*left$',
+        r'^only\s+\d+\s+left$',
+        r'^popular$',
+        r'^-?\d+%$',
+        r'^\d+%\s*off$',
+        r'^deal[s]?$',
+        r'^ale$',
+        r'^soodus.*$',
+        r'^sponsored$',
+        r'^uus$',
+        r'^new$',
+        r'^kampaania$',
+        r'^w\+\s*weeks?$'
+    ]
+    lines = [line.strip() for line in raw_text.split("\n") if line.strip() and "€" not in line]
+    clean_lines = []
+    for line in lines:
+        if any(re.match(p, line, re.IGNORECASE) for p in badge_patterns):
+            continue
+        clean_lines.append(line)
+
+    return clean_lines[0] if clean_lines else (lines[0] if lines else raw_text[:35])
+
 def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "") -> tuple[bool, bool, str]:
     """
     Validates whether a found product card on Wolt is an exact match or a candidate substitute.
@@ -385,8 +425,7 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
                     if any(bad in txt for bad in ["Discover", "W+ Weeks", "Deals", "Halloween", "Everyday Low Prices", "Fight Food Waste", "Categories"]):
                         continue
                     
-                    lines = [line.strip() for line in txt.split("\n") if line.strip() and "€" not in line]
-                    card_title = lines[0] if lines else txt[:35]
+                    card_title = extract_product_card_title(el, txt)
                     
                     prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
                     c_price = (prices[0][0] or prices[0][1]) + " €" if prices else ""
@@ -438,6 +477,14 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
         dialog = page.locator("dialog, [role='dialog']").first
         if dialog.is_visible(timeout=1500):
             modal_opened = True
+            try:
+                modal_h = dialog.locator("h1, h2, h3, [data-test-id*='header'], [data-test-id*='title']").first
+                if modal_h.is_visible(timeout=200):
+                    mt = modal_h.inner_text().strip()
+                    if mt and len(mt) > 2 and not any(re.match(p, mt, re.IGNORECASE) for p in [r'^\d+\s*left$', r'^popular$', r'^-?\d+%$']):
+                        chosen_title = mt
+            except Exception:
+                pass
             if target_qty > 1:
                 stepper_plus = dialog.locator(
                     "button[aria-label*='Increase'], button[aria-label*='Suurenda'], button[aria-label*='Add'], button[data-test-id*='stepper-add'], button[data-test-id*='increment'], button:has-text('+')"
@@ -777,7 +824,7 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
                         prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
                         lines = [line.strip() for line in txt.split("\n") if line.strip()]
                         if len(prices) >= 2 or any(w in txt.lower() for w in ["-%", "off", "deal", "ale", "soodus"]):
-                            title = lines[0] if lines else "Item"
+                            title = extract_product_card_title(card, txt)
                             current_p = prices[0][0] or prices[0][1] if prices else ""
                             orig_p = prices[1][0] or prices[1][1] if len(prices) > 1 else ""
                             results["deals"].append({
@@ -832,8 +879,7 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
                                         if any(bad_meat in txt.lower() for bad_meat in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "mortadella"]):
                                             continue
                                     
-                                    lines = [line.strip() for line in txt.split("\n") if line.strip() and "€" not in line]
-                                    title = lines[0] if lines else txt[:35]
+                                    title = extract_product_card_title(card, txt)
 
                                     if not title or title in seen_titles:
                                         continue
