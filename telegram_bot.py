@@ -107,6 +107,7 @@ DAILY_MENU_TIME = os.getenv("DAILY_MENU_TIME", "09:00")
 user_pending_plans = {}
 user_pending_substitutions = {}
 user_pending_photo_meal = {}
+user_pending_guest_items = {}
 active_user_tasks = {}
 user_waiting_state = {}
 
@@ -952,8 +953,8 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, sugge
     budget_limit = cfg.get("max_budget")
     budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit"
 
-    # Candidate shopping list tailored by diet, allergies, household size, and breakfast
-    filtered_items = get_candidate_grocery_list(prefs, user_id=user_id)
+    # Candidate shopping list tailored by diet, allergies, household size, breakfast, and custom suggestions/guests
+    filtered_items = get_candidate_grocery_list(prefs, user_id=user_id, suggestions=suggestions)
 
     # Synchronize and save the meal plan for these exact items with suggestions
     new_plan = await asyncio.to_thread(
@@ -1637,6 +1638,31 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             query,
             "❌ *Sustituto(s) Descartados.*\n\nTu carrito en Wolt contiene únicamente los productos exactos confirmados."
         )
+    elif data == "btn_merge_guest_items":
+        guest_items = user_pending_guest_items.pop(user_id, [])
+        if not guest_items:
+            await query_edit_safe(query, "ℹ️ No pending guest items found to merge.")
+        else:
+            current_cart = user_pending_plans.get(user_id, [])
+            cart_dict = {name: qty for name, qty in current_cart}
+            for g_name, g_qty in guest_items:
+                cart_dict[g_name] = cart_dict.get(g_name, 0) + g_qty
+            updated_cart = list(cart_dict.items())
+            user_pending_plans[user_id] = updated_cart
+            
+            summary_lines = "\n".join([f"• `{name}` × {qty}" for name, qty in updated_cart])
+            confirm_msg = (
+                "✅ *Guest Portions Added to Your Wolt Order!*\n\n"
+                "Your weekly shopping cart has been merged into a single order with extra guest portions:\n\n"
+                f"{summary_lines}\n\n"
+                "👇 Click below when you are ready to build this consolidated order in Wolt:"
+            )
+            keyboard = [
+                [InlineKeyboardButton("🛒 Build Consolidated Cart on Wolt", callback_data="btn_confirm_cart")],
+                [InlineKeyboardButton("⚡ Auto Pay & Order", callback_data="btn_confirm_autopay")],
+                [InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu")]
+            ]
+            await query.message.reply_text(confirm_msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     elif data == "btn_today_menu":
         await menu_command(update, context)
     elif data == "btn_week_plan":
@@ -2241,6 +2267,29 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
             ]
         ]
+        
+        # If the user has a pending weekly cart and ordered extra servings for guests/special meal, offer 1-click merge
+        h_size = prefs.get("household_size", 1)
+        if user_id in user_pending_plans and final_servings > h_size:
+            extra_count = final_servings - h_size
+            diet = prefs.get("diet_type", "omnivore").lower()
+            guest_items = []
+            if diet == "pescatarian":
+                guest_items.append(("Lõhefilee 400g", max(1, int(round((extra_count * 200) / 400)))))
+            elif diet in ["vegetarian", "vegan"]:
+                guest_items.append(("Tofu 300g", max(1, int(round((extra_count * 150) / 300)))))
+            else:
+                guest_items.append(("Tallegg Broilerifilee 500g", max(1, int(round((extra_count * 200) / 500)))))
+            guest_items.append(("Punane paprika", max(1, extra_count)))
+            guest_items.append(("Kirsstomat 250g", 1))
+            
+            user_pending_guest_items[user_id] = guest_items
+            guest_summary = ", ".join([f"{name} ×{qty}" for name, qty in guest_items])
+            keyboard.insert(0, [
+                InlineKeyboardButton(f"🛒 Add Guests' Food to Weekly Cart (+{extra_count} pers)", callback_data="btn_merge_guest_items")
+            ])
+            recipe_text += f"\n\n💡 *Single Wolt Order Tip:* You have an active weekly cart staged! Click below to merge extra guest portions ({guest_summary}) into your single Wolt order before checkout."
+
         if msg:
             await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:

@@ -35,8 +35,8 @@ SAMPLE_WEEKLY_GROCERY_LIST = [
     ("Banaan", 7)                           # Daily fresh fruit snack
 ]
 
-def get_candidate_grocery_list(prefs: dict, user_id=None) -> list[tuple[str, int]]:
-    """Constructs a personalized candidate grocery shopping list tailored by diet, allergies, household size, and breakfast needs."""
+def get_candidate_grocery_list(prefs: dict, user_id=None, suggestions: str = None) -> list[tuple[str, int]]:
+    """Constructs a personalized candidate grocery shopping list tailored by diet, allergies, household size, breakfast needs, and optional special meal suggestions."""
     h_size = max(1, prefs.get("household_size", 1))
     diet = prefs.get("diet_type", "omnivore").lower()
     allergies = [a.lower() for a in prefs.get("allergies", [])]
@@ -116,6 +116,32 @@ def get_candidate_grocery_list(prefs: dict, user_id=None) -> list[tuple[str, int
         ("Valio Riivitud Mozzarella 200g", max(1, int(2 * h_size))),
         ("Banaan", max(1, int(7 * h_size)))
     ])
+
+    # 4. Extra servings / guest food from suggestions (e.g. "special lunch for 3 person")
+    if suggestions:
+        import re
+        sug_low = suggestions.lower()
+        match = re.search(r'(\d+)\s*(?:person|people|guests?|personas?|invitad)', sug_low)
+        target_servings = int(match.group(1)) if match else None
+        
+        # If the requested meal target is greater than the regular household size:
+        extra_servings = 0
+        if target_servings and target_servings > h_size:
+            extra_servings = target_servings - h_size
+        elif any(w in sug_low for w in ["guest", "guests", "invitad", "amigo", "friends"]):
+            extra_servings = 2
+            
+        if extra_servings > 0:
+            # Add extra protein and side ingredients for the special lunch/dinner
+            extra_prot_packs = max(1, int(round((extra_servings * 200) / 450)))
+            if diet == "pescatarian":
+                items.append(("Lõhefilee 400g", extra_prot_packs))
+            elif diet in ["vegetarian", "vegan"]:
+                items.append(("Tofu 300g", extra_prot_packs))
+            else:
+                items.append(("Tallegg Broilerifilee 500g", extra_prot_packs))
+            items.append(("Punane paprika", max(1, extra_servings)))
+            items.append(("Kirsstomat 250g", 1))
 
     return items
 
