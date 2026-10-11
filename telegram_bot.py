@@ -11,6 +11,9 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 import asyncio
+import subprocess
+import platform
+import socket
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -74,6 +77,35 @@ from wolt_manager import (
 # Persistent Log File Path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(BASE_DIR, "telegram_bot.log")
+VERSION_FILE = os.path.join(BASE_DIR, "data", ".last_deployed_commit")
+
+def get_git_version_info() -> dict:
+    """Reads current git commit hash, commit message, and commit date."""
+    commit = "unknown"
+    commit_msg = ""
+    commit_date = ""
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=BASE_DIR,
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        commit_msg = subprocess.check_output(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=BASE_DIR,
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        commit_date = subprocess.check_output(
+            ["git", "log", "-1", "--pretty=%cd", "--date=format:%Y-%m-%d %H:%M"],
+            cwd=BASE_DIR,
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+    except Exception:
+        pass
+    return {"commit": commit, "message": commit_msg, "date": commit_date}
 
 # Logging configuration (Rotating File + Optional Console)
 log_handlers = [RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")]
@@ -398,6 +430,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     auto_pay_active = cfg.get("auto_pay", False)
     budget_limit = cfg.get("max_budget")
     budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit (∞)"
+    ver_info = get_git_version_info()
+    commit_badge = f"`{ver_info.get('commit', 'latest')}`"
     
     welcome_text = (
         f"👋 Hello {user.first_name if user else 'there'}!\n\n"
@@ -405,7 +439,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 *Profile ID:* `{user_id}`\n"
         f"🏬 *Venue:* `{store}` ({city.capitalize()})\n"
         f"💳 *Checkout Flow:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review & Sync'}`\n"
-        f"💶 *Cart Budget:* `{budget_txt}`\n\n"
+        f"💶 *Cart Budget:* `{budget_txt}`\n"
+        f"📌 *Version:* {commit_badge}\n\n"
         "Here is what you can do:\n"
         "• 🌅 `/today` (or `/menu`) - Today's meals, portions & chef tips\n"
         "• 📅 `/week [sugerencias]` - Browse 7-day schedule (or re-plan with suggestions)\n"
@@ -2504,8 +2539,79 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 pass
 
+@auth_guard
+async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows current bot version, git commit hash, and server status."""
+    ver = get_git_version_info()
+    hostname = socket.gethostname()
+    os_info = platform.system() + " " + platform.release()
+    now_str = datetime.now(tz=BOT_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+
+    text = (
+        "🤖 *MercaditosBot Version & Deployment Info*\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 *Commit:* `{ver.get('commit', 'unknown')}`\n"
+        f"📝 *Último Cambio:* _{ver.get('message', 'N/A')}_\n"
+        f"📅 *Fecha Commit:* `{ver.get('date', 'N/A')}`\n"
+        f"🖥️ *Host:* `{hostname}` ({os_info})\n"
+        f"🕒 *Hora Servidor:* `{now_str}`\n"
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+        "✅ Bot operativo y sincronizado."
+    )
+    await reply_safe(update, context, text)
+
+async def check_and_notify_deployment(application):
+    """Detects if a new version/commit was deployed and sends a notification message to users."""
+    try:
+        ver = get_git_version_info()
+        curr_commit = ver.get("commit", "unknown")
+        if curr_commit == "unknown":
+            return
+
+        os.makedirs(os.path.join(BASE_DIR, "data"), exist_ok=True)
+        prev_commit = ""
+        if os.path.exists(VERSION_FILE):
+            try:
+                with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                    prev_commit = f.read().strip()
+            except Exception:
+                pass
+
+        if prev_commit != curr_commit:
+            try:
+                with open(VERSION_FILE, "w", encoding="utf-8") as f:
+                    f.write(curr_commit)
+            except Exception:
+                pass
+
+            active_users = set(list_active_users() + (ALLOWED_USERS if ALLOWED_USERS else []))
+            if not active_users and ALLOWED_USERS:
+                active_users = set(ALLOWED_USERS)
+
+            now_str = datetime.now(tz=BOT_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+            msg_text = (
+                "🚀 *¡MercaditosBot Actualizado!*\n\n"
+                f"📌 *Nueva Versión / Commit:* `{curr_commit}`\n"
+                f"📝 *Cambios:* _{ver.get('message', 'Actualización del sistema')}_\n"
+                f"🕒 *Fecha:* `{ver.get('date', now_str)}`\n\n"
+                "✅ *El bot se ha reiniciado correctamente y está listo para recibir comandos.*"
+            )
+
+            for uid in active_users:
+                try:
+                    await application.bot.send_message(
+                        chat_id=uid,
+                        text=msg_text,
+                        parse_mode="Markdown"
+                    )
+                    logger.info(f"Deployment notification sent to user {uid} (commit: {curr_commit})")
+                except Exception as e:
+                    logger.warning(f"Could not send deploy notification to user {uid}: {e}")
+    except Exception as e:
+        logger.warning(f"Deployment notification check failed: {e}")
+
 async def post_init(application):
-    """Registers bot autocomplete command suggestions with Telegram API."""
+    """Registers bot autocomplete command suggestions with Telegram API and notifies on deployment."""
     commands = [
         BotCommand("today", "🌅 Today's scheduled meals, portions & tips"),
         BotCommand("menu", "🌅 View today's full menu"),
@@ -2528,6 +2634,7 @@ async def post_init(application):
         BotCommand("cart", "🛒 Build Wolt cart directly (/cart Banaan:6)"),
         BotCommand("wolt", "🛍️ Check isolated Wolt browser session"),
         BotCommand("store", "🏬 Change Wolt store venue (/store wolt-market-maakri)"),
+        BotCommand("version", "📌 Ver versión y commit activo del bot"),
         BotCommand("setkey", "🔑 Configure Gemini API key for photo vision"),
         BotCommand("setjev", "⚡ Configure Jev AI key for sub-200ms decision routing"),
         BotCommand("stop", "🛑 Abort running cart creation or scan"),
@@ -2540,6 +2647,9 @@ async def post_init(application):
         logger.info("Bot command autocomplete menu successfully registered with Telegram API.")
     except Exception as e:
         logger.warning(f"Failed to register bot commands with Telegram API: {e}")
+
+    # Send deployment notification if code updated
+    await check_and_notify_deployment(application)
 
 def main():
     """Main application entry point."""
@@ -2563,6 +2673,7 @@ def main():
     app.add_handler(CommandHandler("stop", stop_command))
     app.add_handler(CommandHandler("abort", stop_command))
     app.add_handler(CommandHandler("cancel", stop_command))
+    app.add_handler(CommandHandler(["version", "ver", "commit"], version_command))
     app.add_handler(CommandHandler("today", menu_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("recipe", recipe_command))
