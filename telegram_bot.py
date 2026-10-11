@@ -521,35 +521,49 @@ async def recipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dish_name = "Today's Dish"
     ingredients = []
     
-    if args:
-        arg_str = " ".join(args).strip().lower()
-        if arg_str in ["breakfast", "brekkie", "desayuno"]:
-            meal = day_data.get("breakfast", {})
-            dish_name = meal.get("title", "Breakfast")
-            ingredients = meal.get("ingredients", ["Eggs", "Toast", "Avocado", "Butter"])
-        elif arg_str in ["lunch", "almuerzo"]:
-            meal = day_data.get("lunch", {})
-            dish_name = meal.get("title", "Lunch")
-            ingredients = meal.get("ingredients", ["Chicken fillet", "Rice", "Bell peppers", "Soy sauce"])
-        elif arg_str in ["dinner", "cena"]:
-            meal = day_data.get("dinner", {})
-            dish_name = meal.get("title", "Dinner")
-            ingredients = meal.get("ingredients", ["Protein", "Vegetables", "Pasta", "Garlic"])
-        elif arg_str in ["snack"]:
-            meal = day_data.get("snack", {})
-            dish_name = meal.get("title", "Healthy Snack")
-            ingredients = meal.get("ingredients", ["Banana", "Dark chocolate"])
+    servings = None
+    arg_raw = " ".join(args).strip()
+    if arg_raw:
+        m_serv = re.search(r'(?:for|para|serves|serving|servings)\s+(\d+)\s*(?:person|persons|people|personas|guests)?', arg_raw, re.IGNORECASE)
+        if not m_serv:
+            m_serv = re.search(r'\b(\d+)\s*(?:person|persons|people|personas|guests)\b', arg_raw, re.IGNORECASE)
+        if not m_serv:
+            m_serv = re.search(r'\b(\d+)$', arg_raw)
+        if m_serv:
+            servings = int(m_serv.group(1))
+            arg_clean = re.sub(m_serv.group(0), '', arg_raw, flags=re.IGNORECASE).strip()
         else:
-            dish_name = "Custom Chef Creation"
-            ingredients = [a.strip() for a in " ".join(args).split(",") if a.strip()]
+            arg_clean = arg_raw
     else:
+        arg_clean = ""
+
+    arg_low = arg_clean.lower()
+    if any(w in arg_low for w in ["breakfast", "brekkie", "desayuno"]):
+        meal = day_data.get("breakfast", {})
+        dish_name = meal.get("title", "Today's Breakfast")
+        ingredients = meal.get("ingredients", ["Eggs", "Toast", "Butter"])
+    elif any(w in arg_low for w in ["lunch", "almuerzo"]) or not arg_clean:
         meal = day_data.get("lunch", {})
         dish_name = meal.get("title", "Today's Lunch")
-        ingredients = meal.get("ingredients", ["Chicken", "Rice", "Peppers"])
-        
-    msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a step-by-step gourmet recipe for:* `{dish_name}`...")
+        ingredients = meal.get("ingredients", ["Chicken fillet", "Rice", "Bell peppers", "Soy sauce"])
+    elif any(w in arg_low for w in ["dinner", "cena"]):
+        meal = day_data.get("dinner", {})
+        dish_name = meal.get("title", "Today's Dinner")
+        ingredients = meal.get("ingredients", ["Protein", "Vegetables", "Pasta", "Garlic"])
+    elif any(w in arg_low for w in ["snack"]):
+        meal = day_data.get("snack", {})
+        dish_name = meal.get("title", "Healthy Snack")
+        ingredients = meal.get("ingredients", ["Banana", "Dark chocolate"])
+    else:
+        dish_name = arg_clean.strip() or "Custom Chef Creation"
+        ingredients = [a.strip() for a in arg_clean.split(",") if a.strip()]
+
+    prefs = load_user_preferences(user_id=user_id)
+    final_servings = servings or prefs.get("household_size", 1)
+    serv_msg = f" (for {final_servings} people)" if final_servings > 1 else ""
+    msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a gourmet recipe for:* `{dish_name}`{serv_msg}...")
     
-    recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients, None, None, user_id)
+    recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients, prefs, None, user_id, final_servings)
     
     keyboard = [
         [
@@ -2188,8 +2202,34 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await preferences_command(update, context)
     elif intent == "recipe":
         dish_name = params.get("dish_or_ingredients") or user_text
-        msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a step-by-step recipe for:* `{dish_name}`...")
-        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, [dish_name], None, None, user_id)
+        servings = params.get("servings")
+        plan = load_meal_plan(user_id=user_id)
+        days = plan.get("days", [])
+        now = datetime.now()
+        day_idx = min(6, max(0, now.weekday()))
+        day_data = days[day_idx] if days and day_idx < len(days) else {}
+
+        # If user asks for lunch or dinner, anchor with today's scheduled meal ingredients
+        ingredients = []
+        low_d = dish_name.lower()
+        if "lunch" in low_d or "almuerzo" in low_d:
+            meal = day_data.get("lunch", {})
+            scheduled_title = meal.get("title")
+            if scheduled_title:
+                dish_name = f"{scheduled_title} (Special Edition)"
+                ingredients = meal.get("ingredients", [])
+        elif "dinner" in low_d or "cena" in low_d:
+            meal = day_data.get("dinner", {})
+            scheduled_title = meal.get("title")
+            if scheduled_title:
+                dish_name = f"{scheduled_title} (Special Edition)"
+                ingredients = meal.get("ingredients", [])
+
+        prefs = load_user_preferences(user_id=user_id)
+        final_servings = servings or prefs.get("household_size", 1)
+        serv_text = f" (for {final_servings} people)" if final_servings > 1 else ""
+        msg = await reply_safe(update, context, f"👨‍🍳 *Chef AI is writing a gourmet recipe for:* `{dish_name}`{serv_text}...")
+        recipe_text = await asyncio.to_thread(generate_ai_recipe, dish_name, ingredients if ingredients else [dish_name], prefs, None, user_id, final_servings)
         keyboard = [
             [
                 InlineKeyboardButton("🍳 Breakfast Recipe", callback_data="btn_recipe_breakfast"),

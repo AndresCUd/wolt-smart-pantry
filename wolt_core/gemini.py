@@ -371,9 +371,18 @@ Respond ONLY with a valid JSON object matching this schema:
         val = False if any(w in low for w in ["off", "disable", "no", "stop", "false", "review"]) else True
         return {"intent": "set_autopay", "parameters": {"autopay_value": val}}
         
-    # 4. Recipe
-    if any(w in low for w in ["recipe", "how to cook", "how to make", "instructions for", "prepare", "receta"]):
-        return {"intent": "recipe", "parameters": {"dish_or_ingredients": user_text}}
+    # 4. Recipe / Special cooking request for X people
+    if any(w in low for w in ["recipe", "how to cook", "how to make", "instructions for", "prepare", "receta"]) or (
+        any(w in low for w in ["cook", "make", "hacer", "cocinar", "preparar", "lunch", "dinner", "almuerzo", "cena"]) and
+        any(w in low for w in ["special", "especial", "person", "persons", "people", "personas", "guest", "guests", "for 2", "for 3", "for 4", "for 5", "para 2", "para 3", "para 4", "para 5"])
+    ):
+        servings = None
+        m_s = re.search(r'(\d+)\s*(?:person|persons|people|personas|guests)', low)
+        if not m_s:
+            m_s = re.search(r'(?:for|para)\s+(\d+)', low)
+        if m_s:
+            servings = int(m_s.group(1))
+        return {"intent": "recipe", "parameters": {"dish_or_ingredients": user_text, "servings": servings}}
         
     # 5. Today / Menu
     if any(w in low for w in ["today", "menu", "lunch", "dinner", "breakfast", "snack", "what to eat", "what am i eating", "hoy", "desayuno", "almuerzo", "cena"]):
@@ -441,7 +450,7 @@ Respond ONLY with a valid JSON object matching this schema:
         "chef_reply": "I'm your Wolt Smart Pantry Chef! I can plan your meals, incorporate your custom meal suggestions, manage your fridge inventory, check live store deals, and build your Wolt carts automatically. Tell me what you'd like to do!"
     }
 
-def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = None, api_key: str = None, user_id=None) -> str:
+def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = None, api_key: str = None, user_id=None, servings: int = None) -> str:
     """Generates an award-winning chef recipe using Gemini based on in-stock ingredients & preferences."""
     if not api_key and user_id:
         cfg = get_user_config(user_id)
@@ -449,11 +458,19 @@ def generate_ai_recipe(dish_name: str, ingredients: list = None, prefs: dict = N
     if prefs is None:
         prefs = load_user_preferences(user_id=user_id)
         
+    # Auto-detect servings if not explicitly supplied
+    if servings is None:
+        m = re.search(r'(?:for|para|serves|serving|servings)\s+(\d+)\s*(?:person|persons|people|personas|guests)?', dish_name, re.IGNORECASE)
+        if not m:
+            m = re.search(r'\b(\d+)\s*(?:person|persons|people|personas|guests)\b', dish_name, re.IGNORECASE)
+        if m:
+            servings = int(m.group(1))
+
+    h_size = servings if servings and servings > 0 else max(1, prefs.get("household_size", 1))
     ing_text = ", ".join(ingredients) if ingredients else "available in-stock pantry items"
     allergies = ", ".join(prefs.get("allergies", [])) or "None"
     avoided = ", ".join(prefs.get("avoided_ingredients", [])) or "None"
     diet = prefs.get("diet_type", "omnivore")
-    h_size = prefs.get("household_size", 1)
 
     if api_key:
         prompt = f"""
