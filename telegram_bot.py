@@ -924,6 +924,11 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             save_user_preferences(prefs, user_id=user_id)
             await reply_safe(update, context, f"✅ *Breakfast Preference Updated:*\n`{val.strip()}`\n\nYour weekly meal plans and Wolt grocery baskets will now automatically include your personalized breakfast!")
             return
+        elif subcmd in ["coffee", "cafe", "café", "kohv", "kapslid", "capsule", "kapsel"]:
+            prefs["preferred_coffee"] = val.strip()
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Preferred Coffee Updated:*\n`{val.strip()}`\n\nYour weekly meal plans and Wolt grocery baskets will now automatically include this coffee!")
+            return
         elif subcmd in ["allergy", "allergies"]:
             new_allergies = [a.strip() for a in val.split(",") if a.strip()]
             prefs["allergies"] = new_allergies
@@ -954,6 +959,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "avoided_ingredients": [],
                 "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
                 "breakfast_preference": "",
+                "preferred_coffee": "Dolce Gusto Café Au Lait kohvikapslid",
                 "household_size": 1,
                 "notes": ""
             }
@@ -963,16 +969,19 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Show current preferences
     b_display = prefs.get('breakfast_preference') or 'Standard (Scrambles & Omelettes)'
+    c_display = prefs.get('preferred_coffee') or 'Dolce Gusto Café Au Lait kohvikapslid'
     text = (
         "👤 *Your Dietary Profile & Preferences:*\n\n"
         f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
         f"• *Household Size:* `{prefs.get('household_size', 1)} person(s)`\n"
         f"• *Custom Breakfast:* `{b_display}`\n"
+        f"• *Preferred Coffee:* `{c_display}`\n"
         f"• *Allergies:* `{', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}`\n"
         f"• *Avoided Foods:* `{', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}`\n"
         f"• *Preferred Proteins:* `{', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}`\n\n"
         "💡 *How to update from Telegram:*\n"
         "• `/pref breakfast 1 fried egg + 2 slices of bacon + bread/pancakes + coffee`\n"
+        "• `/pref coffee Dolce Gusto Café Au Lait kohvikapslid`\n"
         "• `/pref allergy peanuts, shellfish, lactose`\n"
         "• `/pref avoid mushrooms, eggplant`\n"
         "• `/pref diet high-protein` _(or pescatarian, vegetarian, vegan)_\n"

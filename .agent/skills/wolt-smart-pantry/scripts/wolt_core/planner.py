@@ -73,8 +73,14 @@ def get_candidate_grocery_list(prefs: dict, user_id=None, suggestions: str = Non
             items.append(("Vilma Pannkoogijahu 400g", 1))
             
         # Check coffee
-        if any(w in b_pref for w in ["coffee", "coffe", "kohv", "cafe", "café", "espresso"]):
-            items.append(("Paulig Classic jahvatatud kohv 500g", 1))
+        if any(w in b_pref for w in ["coffee", "coffe", "kohv", "cafe", "café", "espresso", "capsule", "kapsel", "kapslid"]) or prefs.get("preferred_coffee"):
+            coffee_choice = prefs.get("preferred_coffee")
+            if not coffee_choice:
+                if any(w in b_pref for w in ["nespresso"]):
+                    coffee_choice = "Nespresso kohvikapslid"
+                else:
+                    coffee_choice = "Dolce Gusto Café Au Lait kohvikapslid"
+            items.append((coffee_choice, 1))
             
         # Check avocado
         if any(w in b_pref for w in ["avocado", "avokaado", "aguacate"]):
@@ -219,6 +225,12 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
     ]
 
     days_data = []
+    coffee_pref = prefs.get("preferred_coffee", "")
+    if not coffee_pref:
+        coffee_ingredient = "Dolce Gusto Café Au Lait"
+    else:
+        coffee_ingredient = "Dolce Gusto Café Au Lait" if "dolce" in coffee_pref.lower() else coffee_pref.split("kohvikapslid")[0].strip()
+
     for idx, (day_name, tier, alert) in enumerate(day_configs):
         if b_pref:
             b_low = b_pref.lower()
@@ -226,36 +238,36 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
                 breakfast = {
                     "title": "Classic Crispy Fried Egg, Bacon & Warm Toast with Coffee",
                     "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
-                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Paulig coffee", "Butter"],
-                    "tip": "🍳 **Lace-Edge Method:** Crisp bacon in a medium pan for 4 mins. Fry egg in residual bacon fat for 90s until edges are crisp and yolk is runny. Serve with hot buttered toast and freshly brewed coffee."
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", coffee_ingredient, "Butter"],
+                    "tip": f"🍳 **Lace-Edge Method:** Crisp bacon in a medium pan for 4 mins. Fry egg in residual bacon fat for 90s until edges are crisp and yolk is runny. Serve with hot buttered toast and freshly brewed {coffee_ingredient}."
                 }
             elif idx == 1:
                 breakfast = {
                     "title": "Toasted Bacon & Fried Egg Breakfast Sandwich with Coffee",
                     "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
-                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Melted mozzarella", "Paulig coffee"],
-                    "tip": "🥪 **Sandwich Press:** Toast bread with a slice of mozzarella. Layer hot crispy bacon and sunny fried egg inside, press gently so yolk slightly enriches the melted cheese."
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Melted mozzarella", coffee_ingredient],
+                    "tip": f"🥪 **Sandwich Press:** Toast bread with a slice of mozzarella. Layer hot crispy bacon and sunny fried egg inside, press gently so yolk slightly enriches the melted cheese. Enjoy with hot {coffee_ingredient}."
                 }
             elif idx == 2:
                 breakfast = {
                     "title": "Greek Yogurt & Fresh Banana Power Bowl with Coffee",
                     "protein_raw": f"{150 * h_size}g Greek yogurt",
-                    "ingredients": ["Greek yogurt", "Fresh banana", "Honey", "Paulig coffee"],
-                    "tip": "🍯 **Mid-Week Fresh Reset:** A lighter, refreshing morning balance with creamy yogurt, sliced ripe bananas, honey drizzle, and hot morning coffee."
+                    "ingredients": ["Greek yogurt", "Fresh banana", "Honey", coffee_ingredient],
+                    "tip": f"🍯 **Mid-Week Fresh Reset:** A lighter, refreshing morning balance with creamy yogurt, sliced ripe bananas, honey drizzle, and hot morning {coffee_ingredient}."
                 }
             elif idx == 3:
                 breakfast = {
                     "title": "Sunny Fried Egg with Sizzling Bacon & Toast with Coffee",
                     "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
-                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Paulig coffee", "Butter"],
-                    "tip": "🍳 **Pan-Basting Technique:** Spoon hot bacon drippings over the egg white while frying to cook the top quickly while keeping yolk rich and glossy."
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", coffee_ingredient, "Butter"],
+                    "tip": f"🍳 **Pan-Basting Technique:** Spoon hot bacon drippings over the egg white while frying to cook the top quickly while keeping yolk rich and glossy. Serve with {coffee_ingredient}."
                 }
             elif idx == 4:
                 breakfast = {
                     "title": "Soft Bacon Scramble with Warm Toast & Morning Brew",
                     "protein_raw": f"{2 * h_size} Farm eggs + {2 * h_size} Slices bacon",
-                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon (crumbled)", "Tosta bread", "Butter", "Paulig coffee"],
-                    "tip": "🥓 **Crumble Method:** Crisp bacon and chop into bite-sized bits. Gently soft-scramble whisked eggs with butter on low heat, folding in warm bacon bits right before plating."
+                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon (crumbled)", "Tosta bread", "Butter", coffee_ingredient],
+                    "tip": f"🥓 **Crumble Method:** Crisp bacon and chop into bite-sized bits. Gently soft-scramble whisked eggs with butter on low heat, folding in warm bacon bits right before plating with a hot cup of {coffee_ingredient}."
                 }
             elif idx == 5:
                 has_pancakes = any(w in b_low for w in ["pancake", "pannkook"])
@@ -263,15 +275,15 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
                 breakfast = {
                     "title": f"Weekend Special: {carb_name}, Crispy Bacon & Fried Egg with Coffee",
                     "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
-                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Vilma pancake mix" if has_pancakes else "Tosta bread", "Paulig coffee", "Butter / Syrup"],
-                    "tip": "🥞 **Weekend Brunch:** Cook golden pancakes on medium heat until bubbles form, flip for 1 min. Serve alongside crisp sizzling bacon, sunny egg, and a steaming mug of coffee."
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Vilma pancake mix" if has_pancakes else "Tosta bread", coffee_ingredient, "Butter / Syrup"],
+                    "tip": f"🥞 **Weekend Brunch:** Cook golden pancakes on medium heat until bubbles form, flip for 1 min. Serve alongside crisp sizzling bacon, sunny egg, and a steaming mug of {coffee_ingredient}."
                 }
             else:
                 breakfast = {
                     "title": "Sunday Country Bacon & Egg Skillet with Fresh Coffee",
                     "protein_raw": f"{2 * h_size} Farm eggs + {2 * h_size} Slices bacon",
-                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon", "Cherry tomatoes", "Onions", "Paulig coffee"],
-                    "tip": "🍳 **Skillet Frittata:** Sauté chopped bacon with onions and sweet cherry tomatoes until fragrant. Pour whisked eggs over, cover for 4 mins on low heat until set."
+                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon", "Cherry tomatoes", "Onions", coffee_ingredient],
+                    "tip": f"🍳 **Skillet Frittata:** Sauté chopped bacon with onions and sweet cherry tomatoes until fragrant. Pour whisked eggs over, cover for 4 mins on low heat until set. Serve with {coffee_ingredient}."
                 }
         elif idx == 0:
             breakfast = {
