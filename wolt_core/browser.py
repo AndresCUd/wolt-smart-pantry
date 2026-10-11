@@ -74,6 +74,82 @@ def get_cart_total_price(page) -> float:
         pass
     return 0.0
 
+def clear_cart(page) -> bool:
+    """Empties the current Wolt cart if any leftover items exist to ensure a clean new grocery order."""
+    try:
+        initial = get_cart_total_price(page)
+        if initial <= 0.0:
+            return True
+        print(f"[*] [🗑️] Existing cart detected ({initial:.2f} €). Clearing cart before starting new order...")
+        close_any_unwanted_modal(page)
+        
+        # 1. Open order review drawer
+        view_order_btn = page.locator(
+            "button[data-test-id*='cart-view-button'], button[data-test-id*='view-order'], button:has-text('View order'), button:has-text('Vaata tellimust')"
+        ).first
+        if view_order_btn.is_visible(timeout=1500):
+            click_element_safely(view_order_btn)
+            time.sleep(1.2)
+            
+        # 2. Look for bulk clear/delete buttons
+        clear_selectors = [
+            "button[data-test-id*='clear-cart']",
+            "button[data-test-id*='delete-cart']",
+            "button[aria-label*='Clear shopping cart']",
+            "button[aria-label*='Tühjenda ostukorv']",
+            "button[aria-label*='Clear']",
+            "button[aria-label*='Tühjenda']",
+            "button[aria-label*='Delete']",
+            "button:has-text('Clear cart')",
+            "button:has-text('Tühjenda ostukorv')"
+        ]
+        cleared = False
+        for c_sel in clear_selectors:
+            btn = page.locator(c_sel).first
+            if btn.is_visible(timeout=600):
+                click_element_safely(btn)
+                time.sleep(0.8)
+                confirm_btn = page.locator(
+                    "button:has-text('Clear'), button:has-text('Tühjenda'), button:has-text('Yes'), button:has-text('Jah'), button:has-text('Delete')"
+                ).first
+                if confirm_btn.is_visible(timeout=1000):
+                    click_element_safely(confirm_btn)
+                    time.sleep(1.0)
+                cleared = True
+                break
+                
+        # 3. If no bulk clear button found, remove items individually
+        if not cleared:
+            remove_btns = page.locator(
+                "button[aria-label*='Remove'], button[aria-label*='Eemalda'], button[data-test-id*='remove'], button[data-test-id*='delete-item'], button:has-text('Remove')"
+            ).all()
+            for r_btn in remove_btns:
+                try:
+                    if r_btn.is_visible(timeout=300):
+                        click_element_safely(r_btn)
+                        time.sleep(0.3)
+                except Exception:
+                    pass
+                    
+        page.keyboard.press("Escape")
+        time.sleep(0.5)
+        close_any_unwanted_modal(page)
+        
+        now = get_cart_total_price(page)
+        if now == 0.0:
+            print("[+] [🗑️] Cart cleared successfully (0.00 €).")
+            return True
+        else:
+            print(f"[!] Notice: Cart total is now {now:.2f} €.")
+            return False
+    except Exception as e:
+        print(f"[!] Warning: Could not clear cart: {e}")
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return False
+
 def close_any_unwanted_modal(page, target_address=None):
     """Dismisses interrupting modals (continue order prompts, address edit popups, cookies)."""
     try:
@@ -401,8 +477,8 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
         return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
     return {"status": "not_found", "requested": query_text, "qty": target_qty}
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=False, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None, allow_substitutes=False):
-    """Executes the automated grocery shopping flow for the given items with budget enforcement and exact item matching."""
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=False, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None, allow_substitutes=False, clear_existing_cart=True, progress_callback=None):
+    """Executes the automated grocery shopping flow for the given items with budget enforcement, progress reporting, and exact item matching."""
     user_browser_dir = get_user_browser_dir(user_id)
     if headless is None:
         headless = bool(sys.platform.startswith("linux") and not os.environ.get("DISPLAY"))
@@ -429,6 +505,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
     added_items = []
     pending_substitutions = []
     failed_items = []
+    cart_was_cleared = False
     set_user_abort(user_id, abort=False)
 
     with sync_playwright() as p:
@@ -451,7 +528,10 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         close_any_unwanted_modal(page, target_address=address)
 
         current_cart_total = get_cart_total_price(page)
-        print(f"[*] Initial cart total: {current_cart_total:.2f} €\n")
+        if current_cart_total > 0 and clear_existing_cart:
+            cart_was_cleared = clear_cart(page)
+            current_cart_total = get_cart_total_price(page)
+        print(f"[*] Initial cart total: {current_cart_total:.2f} € (Cleared: {cart_was_cleared})\n")
 
         for idx, item_data in enumerate(items, 1):
             if is_user_aborted(user_id):
@@ -467,6 +547,20 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
             else:
                 item_name = str(item_data)
                 item_qty = 1
+
+            if progress_callback:
+                try:
+                    progress_callback({
+                        "step": "searching",
+                        "index": idx,
+                        "total": len(items),
+                        "item_name": item_name,
+                        "qty": item_qty,
+                        "current_price": current_cart_total,
+                        "added_items": added_items
+                    })
+                except Exception:
+                    pass
 
             print(f"[{idx}/{len(items)}] 🔍 Searching: '{item_name}' (x{item_qty})...")
             try:
@@ -496,6 +590,21 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                     added_items.append({"title": item_name, "qty": item_qty})
                 else:
                     failed_items.append({"query": item_name, "qty": item_qty})
+
+                if progress_callback:
+                    try:
+                        progress_callback({
+                            "step": "completed_item",
+                            "index": idx,
+                            "total": len(items),
+                            "item_name": item_name,
+                            "qty": item_qty,
+                            "status": st if isinstance(item_res, dict) else ("added" if item_res else "failed"),
+                            "current_price": current_cart_total,
+                            "added_items": added_items
+                        })
+                    except Exception:
+                        pass
 
                 try:
                     search_inp = get_store_search_input(page)
@@ -594,10 +703,24 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         except Exception:
             pass
 
+    items_subtotal = 0.0
+    for it in added_items:
+        pr_str = str(it.get("price", "0")).replace("€", "").replace(",", ".").strip()
+        try:
+            m = re.search(r'\d+(\.\d+)?', pr_str)
+            if m:
+                val = float(m.group(0))
+                items_subtotal += val * it.get("qty", 1)
+        except Exception:
+            pass
+
     return {
         "items_added": added_count,
         "total_items": len(items),
         "final_price": final_price,
+        "items_subtotal": round(items_subtotal, 2),
+        "initial_cart_price": current_cart_total,
+        "cart_cleared": cart_was_cleared,
         "added_items": added_items,
         "pending_substitutions": pending_substitutions,
         "failed_items": failed_items,

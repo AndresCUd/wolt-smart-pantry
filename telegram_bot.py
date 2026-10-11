@@ -203,15 +203,111 @@ async def query_edit_safe(query, text: str, reply_markup=None, parse_mode="Markd
                     pass
             return None
 
+def create_cart_progress_updater(target_msg, store_slug: str):
+    """Creates a thread-safe throttled progress callback for updating Telegram messages while Wolt automation runs."""
+    loop = asyncio.get_running_loop()
+    last_update = [0.0]
+
+    async def _update(data):
+        try:
+            idx = data.get("index", 1)
+            total = data.get("total", 1)
+            item_name = data.get("item_name", "")
+            qty = data.get("qty", 1)
+            price = data.get("current_price", 0.0)
+            step = data.get("step", "searching")
+            added = data.get("added_items", [])
+
+            pct = int((idx / total) * 100) if total else 0
+            filled = int((idx / total) * 10) if total else 0
+            bar = "▓" * filled + "░" * (10 - filled)
+
+            qty_str = f" (x{qty})" if qty > 1 else ""
+            if step == "searching":
+                action_text = f"🔍 *Buscando:* `{item_name}`{qty_str}..."
+            else:
+                action_text = f"✅ *Procesado:* `{item_name}`{qty_str}"
+
+            recent_text = ""
+            if added:
+                recent_items = added[-3:]
+                lines = []
+                for it in recent_items:
+                    t = it.get("title", it.get("name", "Producto"))
+                    q = it.get("qty", 1)
+                    p = it.get("price", "")
+                    p_str = f" ({p})" if p else ""
+                    lines.append(f"  • {t} x{q}{p_str}")
+                recent_text = "\n\n*Últimos agregados:*\n" + "\n".join(lines)
+
+            price_txt = f"\n💶 *Subtotal actual:* **{price:.2f} €**" if price > 0 else ""
+
+            text = (
+                f"🛒 *Armando Carrito en Wolt ({store_slug})...*\n\n"
+                f"Progreso: `[{bar}]` **{idx}/{total}** ({pct}%)\n"
+                f"{action_text}"
+                f"{recent_text}"
+                f"{price_txt}\n\n"
+                f"⏳ _Sincronizando con tu app en tiempo real..._"
+            )
+            await edit_safe(target_msg, text)
+        except Exception:
+            pass
+
+    def callback(data):
+        now = time.time()
+        idx = data.get("index", 1)
+        total = data.get("total", 1)
+        step = data.get("step", "")
+        # Throttle: at least 1.5 seconds between edits, except for the last item
+        if step == "searching" and (now - last_update[0] < 2.0):
+            return
+        if step == "completed_item" and (now - last_update[0] < 1.2) and (idx < total):
+            return
+        last_update[0] = now
+        asyncio.run_coroutine_threadsafe(_update(data), loop)
+
+    return callback
+
 def format_cart_result_message(res: dict, store: str, city: str, country: str, user_id: int):
     """Formats the cart assembly result, including added items, budget alerts, and pending substitutes."""
     final_p = res.get("final_price", 0.0)
+    items_subtotal = res.get("items_subtotal", 0.0)
+    cleared = res.get("cart_cleared", False)
     budget_exceeded = res.get("budget_exceeded", False)
     budget_limit = res.get("max_budget")
     paid_ok = res.get("auto_pay_success", False)
     pending_subs = res.get("pending_substitutions", [])
     added = res.get("added_items", [])
+    failed = res.get("failed_items", [])
     wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+
+    # Build breakdown of added products
+    items_lines = []
+    for a in added:
+        t = a.get("title", a.get("name", "Producto"))
+        q = a.get("qty", 1)
+        pr = a.get("price", "")
+        pr_txt = f" (`{pr}`)" if pr else ""
+        items_lines.append(f"  • {t} x{q}{pr_txt}")
+
+    items_txt = ""
+    if items_lines:
+        items_txt = "📦 *Productos agregados al carrito:*\n" + "\n".join(items_lines) + "\n\n"
+
+    failed_txt = ""
+    if failed:
+        f_lines = [f"  • `{f.get('query', 'Item')}` (x{f.get('qty', 1)})" for f in failed]
+        failed_txt = "⚠️ *No encontrados en tienda:*\n" + "\n".join(f_lines) + "\n\n"
+
+    cleared_txt = " _(carrito anterior vaciado)_" if cleared else ""
+
+    # Clear, unambiguous pricing summary
+    if items_subtotal > 0 and final_p > 0 and abs(final_p - items_subtotal) > 0.10:
+        price_header = f"💶 *Subtotal de productos:* **{items_subtotal:.2f} €**\n🧾 *Total sincronizado en Wolt:* **{final_p:.2f} €**{cleared_txt}\n\n"
+    else:
+        disp_p = final_p if final_p > 0 else items_subtotal
+        price_header = f"💶 *Total Carrito Wolt:* **{disp_p:.2f} €**{cleared_txt}\n\n"
 
     # 1. Substitutions detected -> Ask user to accept or reject
     if pending_subs:
@@ -232,7 +328,7 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
             "━━━━━━━━━━━━━━━━━━━━━\n"
             + "\n\n".join(sub_lines) +
             f"{added_txt}\n"
-            f"💶 *Total actual en carrito:* **{final_p:.2f} €**\n\n"
+            f"{price_header}"
             "❓ *¿Deseas agregar estos sustitutos a tu pedido en Wolt o descartarlos?*"
         )
         keyboard = [
@@ -250,8 +346,10 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
     if budget_exceeded:
         response_text = (
             "🚨 *Budget Safety Alert!*\n\n"
-            f"💶 *Cart Total:* **{final_p:.2f} €**\n"
+            f"{price_header}"
             f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
+            f"{items_txt}"
+            f"{failed_txt}"
             "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
             "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
         )
@@ -265,7 +363,8 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
     if paid_ok:
         response_text = (
             "✅ *Order Successfully Placed & Paid on Wolt!*\n\n"
-            f"💶 *Total Paid:* **{final_p:.2f} €**\n"
+            f"{price_header}"
+            f"{items_txt}"
             "📦 Items recorded into your pantry memory for next week."
         )
         keyboard = [
@@ -277,7 +376,9 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
     # 4. Standard cart ready & synchronized
     response_text = (
         "🎉 *Cart Ready & Synchronized!*\n\n"
-        f"💶 *Cart Total:* **{final_p:.2f} €**\n\n"
+        f"{price_header}"
+        f"{items_txt}"
+        f"{failed_txt}"
         "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
         "👇 Once placed, tap below to sync your virtual pantry memory:"
     )
@@ -1033,6 +1134,7 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             items.append((it.strip(), 1))
 
     msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
+    progress_cb = create_cart_progress_updater(msg, store)
     
     try:
         res = await asyncio.to_thread(
@@ -1045,7 +1147,9 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             record_memory=False,
             auto_pay=auto_pay_pref,
             user_id=user_id,
-            budget=budget_limit
+            budget=budget_limit,
+            clear_existing_cart=True,
+            progress_callback=progress_cb
         )
         user_pending_plans[user_id] = items
         response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
@@ -1553,7 +1657,8 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     elif data == "btn_sample_cart":
         items = SAMPLE_WEEKLY_GROCERY_LIST
         user_pending_plans[user_id] = items
-        await query_edit_safe(query, f"🛒 Building sample grocery cart on Wolt ({store})...")
+        await query_edit_safe(query, f"🛒 *Iniciando armado del carrito en Wolt ({store})...*")
+        progress_cb = create_cart_progress_updater(query.message, store)
         try:
             res = await asyncio.to_thread(
                 add_items_to_cart,
@@ -1564,10 +1669,15 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 keep_open=False,
                 record_memory=False,
                 auto_pay=False,
-                user_id=user_id
+                user_id=user_id,
+                clear_existing_cart=True,
+                progress_callback=progress_cb
             )
             response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
-            await query.message.reply_text(response_text, parse_mode="Markdown", reply_markup=reply_markup)
+            if query.message:
+                await edit_safe(query.message, response_text, reply_markup=reply_markup)
+            else:
+                await query.message.reply_text(response_text, parse_mode="Markdown", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error building sample cart: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
@@ -1578,6 +1688,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
 
         action_msg = "⚡ *Assembling Cart & Submitting Payment...*" if is_autopay_requested else "🛒 *Building Cart on Wolt...*"
         await query_edit_safe(query, f"{action_msg}\nVenue: `{store}` ({len(items)} items).")
+        progress_cb = create_cart_progress_updater(query.message, store)
 
         try:
             res = await asyncio.to_thread(
@@ -1590,10 +1701,15 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 record_memory=is_autopay_requested,
                 auto_pay=is_autopay_requested,
                 user_id=user_id,
-                budget=budget_limit
+                budget=budget_limit,
+                clear_existing_cart=True,
+                progress_callback=progress_cb
             )
             response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
-            await query.message.reply_text(response_text, parse_mode="Markdown", reply_markup=reply_markup)
+            if query.message:
+                await edit_safe(query.message, response_text, reply_markup=reply_markup)
+            else:
+                await query.message.reply_text(response_text, parse_mode="Markdown", reply_markup=reply_markup)
         except Exception as e:
             logger.error(f"Error executing cart flow: {e}", exc_info=True)
             await query.message.reply_text(f"⚠️ Error building cart: {e}")
@@ -1603,6 +1719,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             await query_edit_safe(query, "ℹ️ No hay sustitutos pendientes de confirmación.")
         else:
             await query_edit_safe(query, f"🛒 *Agregando {len(subs)} sustituto(s) aprobados al carrito de Wolt...*")
+            progress_cb = create_cart_progress_updater(query.message, store)
             try:
                 sub_items = [(s.get("found_title", s.get("requested")), s.get("qty", 1)) for s in subs]
                 res = await asyncio.to_thread(
@@ -1615,7 +1732,9 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                     record_memory=False,
                     auto_pay=False,
                     user_id=user_id,
-                    allow_substitutes=True
+                    allow_substitutes=True,
+                    clear_existing_cart=False,
+                    progress_callback=progress_cb
                 )
                 final_p = res.get("final_price", 0.0)
                 wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
@@ -1982,6 +2101,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             auto_pay_pref = cfg.get("auto_pay", False)
             budget_limit = cfg.get("max_budget")
             msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
+            progress_cb = create_cart_progress_updater(msg, store)
             
             try:
                 res = await asyncio.to_thread(
@@ -1994,7 +2114,9 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     record_memory=False,
                     auto_pay=auto_pay_pref,
                     user_id=user_id,
-                    budget=budget_limit
+                    budget=budget_limit,
+                    clear_existing_cart=True,
+                    progress_callback=progress_cb
                 )
                 user_pending_plans[user_id] = items
                 response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
@@ -2315,6 +2437,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             auto_pay_pref = cfg.get("auto_pay", False)
             budget_limit = cfg.get("max_budget")
             msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items_tuples)} items on {store}...")
+            progress_cb = create_cart_progress_updater(msg, store)
             try:
                 res = await asyncio.to_thread(
                     add_items_to_cart,
@@ -2326,7 +2449,9 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     record_memory=False,
                     auto_pay=auto_pay_pref,
                     user_id=user_id,
-                    budget=budget_limit
+                    budget=budget_limit,
+                    clear_existing_cart=True,
+                    progress_callback=progress_cb
                 )
                 response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
                 if msg:
