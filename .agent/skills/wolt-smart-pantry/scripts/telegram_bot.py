@@ -972,7 +972,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
                 "breakfast_preference": "",
                 "preferred_coffee": "Dolce Gusto Café Au Lait kohvikapslid",
-                "preferred_onion": "Roheline sibul 100g",
+                "preferred_onion": "Kollane sibul 1kg",
                 "household_size": 1,
                 "notes": ""
             }
@@ -983,7 +983,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     # Show current preferences
     b_display = prefs.get('breakfast_preference') or 'Standard (Scrambles & Omelettes)'
     c_display = prefs.get('preferred_coffee') or 'Dolce Gusto Café Au Lait kohvikapslid'
-    o_display = prefs.get('preferred_onion') or 'Roheline sibul 100g'
+    o_display = prefs.get('preferred_onion') or 'Kollane sibul 1kg'
     text = (
         "👤 *Your Dietary Profile & Preferences:*\n\n"
         f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
