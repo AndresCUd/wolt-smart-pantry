@@ -195,16 +195,58 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
     days_data = []
     for idx, (day_name, tier, alert) in enumerate(day_configs):
         if b_pref:
-            # Personalized breakfast variations tailored to user preference
             b_low = b_pref.lower()
-            carb_type = "Fluffy Pancakes" if (idx % 2 == 1 and any(w in b_low for w in ["pancake", "pannkook"])) else "Warm Toasted Bread"
-            b_title = f"Crispy Fried Egg, Bacon & {carb_type} with Fresh Coffee"
-            breakfast = {
-                "title": b_title,
-                "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
-                "ingredients": ["Egg", "Rakvere toorsuitsupeekon", carb_type, "Paulig brewed coffee", "Farm butter"],
-                "tip": "🍳 **Crispy Bacon & Sunny Egg Technique:** Render bacon in a cold skillet on medium heat for 4 mins until golden and crisp. Remove bacon to paper towels. Crack egg directly into hot residual bacon fat for 90s until whites set with crispy edges and yolk stays runny. Serve immediately with warm toast or pancakes, accompanied by hot brewed coffee."
-            }
+            if idx == 0:
+                breakfast = {
+                    "title": "Classic Crispy Fried Egg, Bacon & Warm Toast with Coffee",
+                    "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Paulig coffee", "Butter"],
+                    "tip": "🍳 **Lace-Edge Method:** Crisp bacon in a medium pan for 4 mins. Fry egg in residual bacon fat for 90s until edges are crisp and yolk is runny. Serve with hot buttered toast and freshly brewed coffee."
+                }
+            elif idx == 1:
+                breakfast = {
+                    "title": "Toasted Bacon & Fried Egg Breakfast Sandwich with Coffee",
+                    "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Melted mozzarella", "Paulig coffee"],
+                    "tip": "🥪 **Sandwich Press:** Toast bread with a slice of mozzarella. Layer hot crispy bacon and sunny fried egg inside, press gently so yolk slightly enriches the melted cheese."
+                }
+            elif idx == 2:
+                breakfast = {
+                    "title": "Greek Yogurt & Fresh Banana Power Bowl with Coffee",
+                    "protein_raw": f"{150 * h_size}g Greek yogurt",
+                    "ingredients": ["Greek yogurt", "Fresh banana", "Honey", "Paulig coffee"],
+                    "tip": "🍯 **Mid-Week Fresh Reset:** A lighter, refreshing morning balance with creamy yogurt, sliced ripe bananas, honey drizzle, and hot morning coffee."
+                }
+            elif idx == 3:
+                breakfast = {
+                    "title": "Sunny Fried Egg with Sizzling Bacon & Toast with Coffee",
+                    "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Tosta bread", "Paulig coffee", "Butter"],
+                    "tip": "🍳 **Pan-Basting Technique:** Spoon hot bacon drippings over the egg white while frying to cook the top quickly while keeping yolk rich and glossy."
+                }
+            elif idx == 4:
+                breakfast = {
+                    "title": "Soft Bacon Scramble with Warm Toast & Morning Brew",
+                    "protein_raw": f"{2 * h_size} Farm eggs + {2 * h_size} Slices bacon",
+                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon (crumbled)", "Tosta bread", "Butter", "Paulig coffee"],
+                    "tip": "🥓 **Crumble Method:** Crisp bacon and chop into bite-sized bits. Gently soft-scramble whisked eggs with butter on low heat, folding in warm bacon bits right before plating."
+                }
+            elif idx == 5:
+                has_pancakes = any(w in b_low for w in ["pancake", "pannkook"])
+                carb_name = "Fluffy Buttermilk Pancakes" if has_pancakes else "Warm Sourdough Toast"
+                breakfast = {
+                    "title": f"Weekend Special: {carb_name}, Crispy Bacon & Fried Egg with Coffee",
+                    "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
+                    "ingredients": ["Egg", "Rakvere toorsuitsupeekon", "Vilma pancake mix" if has_pancakes else "Tosta bread", "Paulig coffee", "Butter / Syrup"],
+                    "tip": "🥞 **Weekend Brunch:** Cook golden pancakes on medium heat until bubbles form, flip for 1 min. Serve alongside crisp sizzling bacon, sunny egg, and a steaming mug of coffee."
+                }
+            else:
+                breakfast = {
+                    "title": "Sunday Country Bacon & Egg Skillet with Fresh Coffee",
+                    "protein_raw": f"{2 * h_size} Farm eggs + {2 * h_size} Slices bacon",
+                    "ingredients": ["Eggs", "Rakvere toorsuitsupeekon", "Cherry tomatoes", "Onions", "Paulig coffee"],
+                    "tip": "🍳 **Skillet Frittata:** Sauté chopped bacon with onions and sweet cherry tomatoes until fragrant. Pour whisked eggs over, cover for 4 mins on low heat until set."
+                }
         elif idx == 0:
             breakfast = {
                 "title": "3-Egg Scramble with Smashed Avocado & Warm Toast",

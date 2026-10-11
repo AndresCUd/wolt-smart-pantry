@@ -780,9 +780,9 @@ User Special Guidance & Suggestions for this Week:
     breakfast_block = ""
     if b_pref and b_pref.strip():
         breakfast_block = f"""
-User Daily Breakfast Preference:
+User Favorite Breakfast Style:
 "{b_pref.strip()}"
-* MANDATORY: Plan the user's requested breakfast components ({b_pref.strip()}) every morning with creative chef variations and proper portioning for {h_size} person(s). Do NOT default to unrelated 3-egg scrambles unless requested.
+* CHEF GUIDANCE: The user loves this breakfast style ({b_pref.strip()}). Feature these ingredients as the primary morning anchor across the week (4-5 days with creative variations like sunny fried egg with bacon & toast, breakfast melts, fluffy pancake stacks, and scrambled skillets), while offering complementary variety (like lighter fruit bowls or vegetable bakes on reset days) so the morning routine is never monotonous.
 """
 
     prompt = f"""
