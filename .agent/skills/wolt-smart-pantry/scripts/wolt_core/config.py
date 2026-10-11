@@ -150,6 +150,7 @@ def load_user_preferences(user_id=None) -> dict:
         "allergies": [],
         "avoided_ingredients": [],
         "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+        "breakfast_preference": "",
         "household_size": 1,
         "notes": ""
     }
@@ -197,6 +198,7 @@ def display_user_preferences(user_id=None):
     print("="*60)
     print(f"• Diet Type:            {prefs.get('diet_type', 'omnivore').capitalize()}")
     print(f"• Household Size:       {prefs.get('household_size', 1)} person(s)")
+    print(f"• Breakfast:            {prefs.get('breakfast_preference') or 'Standard 3-egg scramble / omelettes'}")
     print(f"• Allergies:            {', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}")
     print(f"• Avoided Ingredients:  {', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}")
     print(f"• Preferred Proteins:   {', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}")

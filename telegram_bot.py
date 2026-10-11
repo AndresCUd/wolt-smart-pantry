@@ -766,7 +766,14 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         subcmd = args[0].lower()
         val = " ".join(args[1:])
         
-        if subcmd in ["allergy", "allergies"]:
+        if subcmd in ["breakfast", "desayuno"]:
+            prefs["breakfast_preference"] = val.strip()
+            if any(w in val.lower() for w in ["bacon", "peekon", "pork", "tocino"]):
+                prefs["avoided_ingredients"] = [av for av in prefs.get("avoided_ingredients", []) if av.lower() not in ["pork", "sealiha", "bacon", "peekon", "tocino"]]
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Breakfast Preference Updated:*\n`{val.strip()}`\n\nYour weekly meal plans and Wolt grocery baskets will now automatically include your personalized breakfast!")
+            return
+        elif subcmd in ["allergy", "allergies"]:
             new_allergies = [a.strip() for a in val.split(",") if a.strip()]
             prefs["allergies"] = new_allergies
             save_user_preferences(prefs, user_id=user_id)
@@ -795,6 +802,7 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "allergies": [],
                 "avoided_ingredients": [],
                 "preferred_proteins": ["chicken", "ground beef", "salmon", "eggs"],
+                "breakfast_preference": "",
                 "household_size": 1,
                 "notes": ""
             }
@@ -803,32 +811,35 @@ async def preferences_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
 
     # Show current preferences
+    b_display = prefs.get('breakfast_preference') or 'Standard (Scrambles & Omelettes)'
     text = (
         "👤 *Your Dietary Profile & Preferences:*\n\n"
         f"• *Diet Type:* `{prefs.get('diet_type', 'omnivore').capitalize()}`\n"
         f"• *Household Size:* `{prefs.get('household_size', 1)} person(s)`\n"
+        f"• *Custom Breakfast:* `{b_display}`\n"
         f"• *Allergies:* `{', '.join(prefs.get('allergies', [])) if prefs.get('allergies') else 'None recorded'}`\n"
         f"• *Avoided Foods:* `{', '.join(prefs.get('avoided_ingredients', [])) if prefs.get('avoided_ingredients') else 'None recorded'}`\n"
         f"• *Preferred Proteins:* `{', '.join(prefs.get('preferred_proteins', [])) if prefs.get('preferred_proteins') else 'Standard'}`\n\n"
         "💡 *How to update from Telegram:*\n"
+        "• `/pref breakfast 1 fried egg + 2 slices of bacon + bread/pancakes + coffee`\n"
         "• `/pref allergy peanuts, shellfish, lactose`\n"
-        "• `/pref avoid pork, mushrooms, eggplant`\n"
+        "• `/pref avoid mushrooms, eggplant`\n"
         "• `/pref diet high-protein` _(or pescatarian, vegetarian, vegan)_\n"
         "• `/pref people 2`\n"
         "• `/pref reset`"
     )
     keyboard = [
         [
+            InlineKeyboardButton("🍳 Set Breakfast", callback_data="btn_prompt_breakfast"),
+            InlineKeyboardButton("👥 Household Size", callback_data="btn_prompt_household")
+        ],
+        [
             InlineKeyboardButton("🥜 Set Allergies", callback_data="btn_prompt_allergy"),
             InlineKeyboardButton("🚫 Avoided Foods", callback_data="btn_prompt_avoid")
         ],
         [
-            InlineKeyboardButton("👥 Household Size", callback_data="btn_prompt_household"),
-            InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref")
-        ],
-        [
-            InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan"),
-            InlineKeyboardButton("🏠 Pantry Status", callback_data="btn_pantry")
+            InlineKeyboardButton("🔄 Reset Preferences", callback_data="btn_reset_pref"),
+            InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan")
         ]
     ]
     await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -943,10 +954,13 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, sugge
 
     sug_header = f"\n💡 *Sugerencias aplicadas:* _{suggestions}_\n" if suggestions else ""
 
+    b_pref = prefs.get("breakfast_preference")
+    b_desc = f"• *🍳 Daily Breakfast:* {b_pref}\n" if b_pref else "• *🍳 Daily Breakfasts:* 3-egg scrambles with avocado & toast, mozzarella & tomato omelettes\n"
+
     plan_text = (
         f"📋 *Proposed 7-Day Meal Plan ({diet.capitalize()} / {household_multiplier} person(s)):*\n"
         f"{sug_header}\n"
-        "• *🍳 Daily Breakfasts:* 3-egg scrambles with avocado & toast, mozzarella & tomato omelettes\n"
+        f"{b_desc}"
         "• *Days 1–3 (Tier 1 Fresh):* High-protein main meals (fresh ground beef, chicken cuts, delicate arugula)\n"
         "• *Days 4–5 (Tier 2 Medium):* Sautéed chicken breast, sweet bell peppers & baby potatoes\n"
         "• *Days 6–7 (Tier 3 Hardy):* Roasted vegetables, frittata & mozzarella pasta bake\n\n"
@@ -1813,6 +1827,13 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             "What dish, meal, or ingredients would you like a gourmet recipe for? (e.g. `salmon with asparagus` or `lunch`) or send `/cancel` to abort:",
             parse_mode="Markdown"
         )
+    elif data == "btn_prompt_breakfast":
+        user_waiting_state[user_id] = {"action": "set_breakfast"}
+        await query.message.reply_text(
+            "🍳 *Set Your Custom Breakfast Preference*\n\n"
+            "Please reply with what you prefer for breakfast every morning (e.g. `1 fried egg + 2 slices of bacon + bread/pancakes + coffee`) or send `/cancel` to abort:",
+            parse_mode="Markdown"
+        )
     elif data == "btn_prompt_allergy":
         user_waiting_state[user_id] = {"action": "set_allergy"}
         await query.message.reply_text(
@@ -1969,6 +1990,15 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 await edit_safe(msg, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
             else:
                 await reply_safe(update, context, recipe_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        elif action == "set_breakfast":
+            prefs = load_user_preferences(user_id=user_id)
+            prefs["breakfast_preference"] = user_text.strip()
+            if any(w in user_text.lower() for w in ["bacon", "peekon", "pork", "tocino"]):
+                prefs["avoided_ingredients"] = [av for av in prefs.get("avoided_ingredients", []) if av.lower() not in ["pork", "sealiha", "bacon", "peekon", "tocino"]]
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Custom Breakfast Saved for Your Profile!*\n\n🍳 `{user_text.strip()}`\n\nYour weekly meal plans and Wolt candidate grocery carts will now automatically prioritize this breakfast!")
             return
 
         elif action == "set_allergy":
@@ -2131,7 +2161,15 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await store_command(update, context)
     elif intent == "preferences":
-        if params.get("allergies"):
+        if params.get("breakfast_preference"):
+            prefs = load_user_preferences(user_id=user_id)
+            b_val = params["breakfast_preference"].strip()
+            prefs["breakfast_preference"] = b_val
+            if any(w in b_val.lower() for w in ["bacon", "peekon", "pork", "tocino"]):
+                prefs["avoided_ingredients"] = [av for av in prefs.get("avoided_ingredients", []) if av.lower() not in ["pork", "sealiha", "bacon", "peekon", "tocino"]]
+            save_user_preferences(prefs, user_id=user_id)
+            await reply_safe(update, context, f"✅ *Custom Breakfast Preference Saved!*\n\n🍳 `{b_val}`\n\nYour weekly meal plans and shopping baskets will now prioritize this breakfast by default!")
+        elif params.get("allergies"):
             prefs = load_user_preferences(user_id=user_id)
             prefs["allergies"] = params["allergies"]
             save_user_preferences(prefs, user_id=user_id)

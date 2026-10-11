@@ -417,7 +417,21 @@ Respond ONLY with a valid JSON object matching this schema:
     if any(w in low for w in ["deal", "discount", "sale", "offer", "cheap", "promo", "ofertas", "descuentos"]):
         return {"intent": "deals", "parameters": {}}
         
-    # 13. Preferences / Allergies
+    # 13. Preferences / Allergies / Custom Breakfast
+    if any(w in low for w in ["breakfast", "desayuno"]) and any(w in low for w in ["prefer", "like", "want", "have", "change", "set", "quiero", "cambiar", "gustar", "custom"]):
+        pref_text = user_text
+        for kw in ["breakfast", "desayuno"]:
+            if kw in low:
+                idx = low.find(kw)
+                after = user_text[idx + len(kw):].strip(" :-–—,/.")
+                for prefix in ["i prefer", "i usually prefer", "i want", "to have", "is", "as"]:
+                    if after.lower().startswith(prefix):
+                        after = after[len(prefix):].strip(" :-–—,/.")
+                if len(after) > 3:
+                    pref_text = after
+                break
+        return {"intent": "preferences", "parameters": {"breakfast_preference": pref_text, "query": user_text}}
+
     if any(w in low for w in ["allergy", "allergic", "avoid", "dislike", "diet", "vegan", "vegetarian", "keto", "alergia"]):
         return {"intent": "preferences", "parameters": {"query": user_text}}
         
@@ -762,6 +776,15 @@ User Special Guidance & Suggestions for this Week:
 * IMPORTANT: Seamlessly incorporate the requested theme, cuisine, dishes, or specific ingredient focus into the 7-day schedule while maintaining strict freshness tiers, portion shrinkage math, and allergy safety.
 """
 
+    b_pref = prefs.get("breakfast_preference", "")
+    breakfast_block = ""
+    if b_pref and b_pref.strip():
+        breakfast_block = f"""
+User Daily Breakfast Preference:
+"{b_pref.strip()}"
+* MANDATORY: Plan the user's requested breakfast components ({b_pref.strip()}) every morning with creative chef variations and proper portioning for {h_size} person(s). Do NOT default to unrelated 3-egg scrambles unless requested.
+"""
+
     prompt = f"""
 You are an executive private chef and certified nutritionist.
 Create an innovative, gourmet, and realistic 7-Day Meal Plan (Monday to Sunday) for {h_size} person(s).
@@ -772,6 +795,7 @@ Allergies (STRICTLY AVOID): {allergies}.
 Disliked/Avoided ingredients: {avoided}.
 Protein Target: ~{raw_p_g}g raw per meal (yields ~{cooked_p_g}g cooked per person accounting for 30% thermal cooking shrinkage).
 {suggestion_block}
+{breakfast_block}
 Freshness Schedule Rules:
 - Monday & Tuesday (Tier 1: Ultra-Fresh): Prioritize delicate leafy greens (arugula/spinach), fresh raw minced meats / fish, and ripe avocados.
 - Wednesday & Thursday (Tier 2: Resilient Produce & Poultry): Chicken breast fillets, bell peppers, broccoli, carrots, and eggs.

@@ -41,18 +41,58 @@ def get_candidate_grocery_list(prefs: dict, user_id=None) -> list[tuple[str, int
     diet = prefs.get("diet_type", "omnivore").lower()
     allergies = [a.lower() for a in prefs.get("allergies", [])]
     avoided = [av.lower() for av in prefs.get("avoided_ingredients", [])]
+    b_pref = (prefs.get("breakfast_preference") or "").lower()
     
-    egg_packs = max(1, int(round((14 * h_size) / 10)))
-    bread_packs = max(1, int(round((7 * h_size) / 7)))
-    avocado_packs = max(1, int(round((4 * h_size) / 2)))
+    # 1. Base Essentials & Breakfast Essentials
+    items = []
     
-    # 1. Base Essentials
-    items = [
-        ("Muna L 10tk", egg_packs),
-        ("Eesti Pagar Tosta röstsai", bread_packs),
-        ("Avokaado 2tk", avocado_packs),
-        ("Kollane sibul 1kg", 1),
-    ]
+    if b_pref:
+        # Check egg quantity needed
+        if any(w in b_pref for w in ["egg", "muna", "huevo"]):
+            eggs_per_day = 1
+            if any(w in b_pref for w in ["2 egg", "two egg", "2 huevo", "dos huevo"]):
+                eggs_per_day = 2
+            elif any(w in b_pref for w in ["3 egg", "three egg", "3 huevo", "tres huevo"]):
+                eggs_per_day = 3
+            egg_packs = max(1, int(round((eggs_per_day * 7 * h_size) / 10)))
+            items.append(("Muna L 10tk", egg_packs))
+            
+        # Check bacon
+        if any(w in b_pref for w in ["bacon", "peekon", "tocino"]):
+            # ~2 slices/day = 14 slices/week per person; 1 pack 150g is ~7-8 slices
+            bacon_packs = max(1, int(round((2 * 7 * h_size) / 8)))
+            items.append(("Rakvere Toorsuitsupeekon 150g", bacon_packs))
+            
+        # Check bread / toast
+        if any(w in b_pref for w in ["bread", "toast", "sai", "leib", "röstsai", "pan"]):
+            bread_packs = max(1, int(round((7 * h_size) / 7)))
+            items.append(("Eesti Pagar Tosta röstsai", bread_packs))
+            
+        # Check pancakes
+        if any(w in b_pref for w in ["pancake", "pancakes", "pannkook", "pannkoogid", "panckage", "panckages"]):
+            items.append(("Vilma Pannkoogijahu 400g", 1))
+            
+        # Check coffee
+        if any(w in b_pref for w in ["coffee", "coffe", "kohv", "cafe", "café", "espresso"]):
+            items.append(("Paulig Classic jahvatatud kohv 500g", 1))
+            
+        # Check avocado
+        if any(w in b_pref for w in ["avocado", "avokaado", "aguacate"]):
+            avocado_packs = max(1, int(round((4 * h_size) / 2)))
+            items.append(("Avokaado 2tk", avocado_packs))
+            
+        items.append(("Kollane sibul 1kg", 1))
+    else:
+        # Standard default baseline
+        egg_packs = max(1, int(round((14 * h_size) / 10)))
+        bread_packs = max(1, int(round((7 * h_size) / 7)))
+        avocado_packs = max(1, int(round((4 * h_size) / 2)))
+        items = [
+            ("Muna L 10tk", egg_packs),
+            ("Eesti Pagar Tosta röstsai", bread_packs),
+            ("Avokaado 2tk", avocado_packs),
+            ("Kollane sibul 1kg", 1),
+        ]
 
     # 2. Proteins by Diet Type
     prot_packs = max(1, int(2 * h_size))
@@ -81,7 +121,7 @@ def get_candidate_grocery_list(prefs: dict, user_id=None) -> list[tuple[str, int
 
 def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, user_suggestions: str = None):
     """Generates an inventory-aligned, 7-day meal plan with breakfast, lunch, dinner, and snacks.
-    Dynamically uses Gemini when configured (incorporating custom suggestions), with robust deterministic fallback.
+    Dynamically uses Gemini when configured (incorporating custom suggestions and breakfast preference), with robust deterministic fallback.
     Respects cooking thermal shrinkage (W_raw = W_cooked / 0.70), user allergies, and freshness tiers."""
     if prefs is None:
         prefs = load_user_preferences(user_id=user_id)
@@ -94,6 +134,7 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
     
     diet = prefs.get("diet_type", "omnivore").lower()
     h_size = max(1, prefs.get("household_size", 1))
+    b_pref = prefs.get("breakfast_preference", "")
     
     raw_p_g = int(215 * h_size)
     cooked_p_g = int(150 * h_size)
@@ -153,7 +194,18 @@ def generate_weekly_meal_plan(inventory_items=None, prefs=None, user_id=None, us
 
     days_data = []
     for idx, (day_name, tier, alert) in enumerate(day_configs):
-        if idx == 0:
+        if b_pref:
+            # Personalized breakfast variations tailored to user preference
+            b_low = b_pref.lower()
+            carb_type = "Fluffy Pancakes" if (idx % 2 == 1 and any(w in b_low for w in ["pancake", "pannkook"])) else "Warm Toasted Bread"
+            b_title = f"Crispy Fried Egg, Bacon & {carb_type} with Fresh Coffee"
+            breakfast = {
+                "title": b_title,
+                "protein_raw": f"{1 * h_size} Farm egg + {2 * h_size} Slices bacon",
+                "ingredients": ["Egg", "Rakvere toorsuitsupeekon", carb_type, "Paulig brewed coffee", "Farm butter"],
+                "tip": "🍳 **Crispy Bacon & Sunny Egg Technique:** Render bacon in a cold skillet on medium heat for 4 mins until golden and crisp. Remove bacon to paper towels. Crack egg directly into hot residual bacon fat for 90s until whites set with crispy edges and yolk stays runny. Serve immediately with warm toast or pancakes, accompanied by hot brewed coffee."
+            }
+        elif idx == 0:
             breakfast = {
                 "title": "3-Egg Scramble with Smashed Avocado & Warm Toast",
                 "protein_raw": f"{3 * h_size} Farm eggs",
