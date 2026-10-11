@@ -162,14 +162,14 @@ def get_store_search_input(page):
     for cand in candidates:
         try:
             loc = page.locator(cand).first
-            if loc.is_visible(timeout=300):
+            if loc.is_visible(timeout=500):
                 ph = (loc.get_attribute("placeholder") or "").strip().lower()
                 if ph in ["search in wolt...", "otsi woltist..."]:
                     continue
                 return loc
         except Exception:
             continue
-    return page.locator("main input").first
+    return None
 
 def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "") -> tuple[bool, bool, str]:
     """
@@ -259,6 +259,13 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
     close_any_unwanted_modal(page)
     
     store_search_input = get_store_search_input(page)
+    if not store_search_input:
+        close_any_unwanted_modal(page)
+        store_search_input = get_store_search_input(page)
+
+    if not store_search_input:
+        print(f"    -> ⚠️ Could not find venue search box for query: {query_text}")
+        return {"status": "error", "requested": query_text, "error": "Search box not found"}
     
     try:
         click_element_safely(store_search_input)
@@ -394,7 +401,7 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
         return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
     return {"status": "not_found", "requested": query_text, "qty": target_qty}
 
-def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=True, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None, allow_substitutes=False):
+def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=None, keep_open=False, record_memory=False, auto_pay=False, user_id=None, headless=None, budget=None, allow_substitutes=False):
     """Executes the automated grocery shopping flow for the given items with budget enforcement and exact item matching."""
     user_browser_dir = get_user_browser_dir(user_id)
     if headless is None:
@@ -433,6 +440,8 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
             viewport={"width": 1280, "height": 850}
         )
         page = context.pages[0] if context.pages else context.new_page()
+        page.set_default_timeout(10000)
+        page.set_default_navigation_timeout(25000)
         
         store_url = f"https://wolt.com/en/{country}/{city}/venue/{store_slug}"
         print(f"[*] Navigating to: {store_url}")
@@ -568,16 +577,22 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                 print(f"[!] Warning: Could not record into pantry memory: {e}")
 
         if keep_open:
-            print("\n[+] The process will terminate when you close the browser window.")
-            try:
-                page.wait_for_event("close", timeout=0)
-            except Exception:
-                pass
-            print("[+] Browser closed. Automation finished.")
-            try:
-                context.close()
-            except Exception:
-                pass
+            if sys.stdin and sys.stdin.isatty():
+                print("\n[+] Browser is open. Close the window or wait up to 120s to finish.")
+                try:
+                    page.wait_for_event("close", timeout=120000)
+                except Exception:
+                    pass
+            else:
+                time.sleep(2.0)
+            print("[+] Browser automation finished.")
+        else:
+            time.sleep(1.0)
+
+        try:
+            context.close()
+        except Exception:
+            pass
 
     return {
         "items_added": added_count,
@@ -618,6 +633,8 @@ def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn
             viewport={"width": 1280, "height": 850}
         )
         page = context.pages[0] if context.pages else context.new_page()
+        page.set_default_timeout(10000)
+        page.set_default_navigation_timeout(25000)
         
         store_url = f"https://wolt.com/en/{country}/{city}/venue/{store_slug}"
         print(f"[*] Navigating to: {store_url}")
