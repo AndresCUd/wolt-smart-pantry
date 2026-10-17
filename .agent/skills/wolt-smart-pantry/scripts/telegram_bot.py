@@ -71,6 +71,10 @@ from wolt_manager import (
     set_user_abort,
     is_user_aborted,
     parse_natural_language_intent,
+    parse_receipt_text_with_ai,
+    parse_pdf_receipt,
+    parse_voice_cart_with_ai,
+    parse_text_cart_with_ai,
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
@@ -420,9 +424,74 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
     ]
     return response_text, InlineKeyboardMarkup(keyboard)
 
+user_pending_labels = {}
+
+def format_staged_cart_message(user_id: int, transcript: str = None, summary_note: str = None):
+    """Formats the currently staged shopping cart with interactive buttons to build on Wolt, add more via voice/text, or clear."""
+    store, city, _ = get_user_store_and_city(user_id)
+    cfg = get_user_config(user_id)
+    auto_pay_active = cfg.get("auto_pay", False)
+    budget_limit = cfg.get("max_budget")
+    budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit (∞)"
+
+    items = user_pending_plans.get(user_id, [])
+    labels_map = user_pending_labels.get(user_id, {})
+
+    header = ""
+    if transcript:
+        header += f"🎙️ *Transcripción:* _{transcript}_\n"
+    if summary_note:
+        header += f"✨ _{summary_note}_\n"
+    if header:
+        header += "\n"
+
+    if not items:
+        text = (
+            f"{header}"
+            "🛒 *Tu Lista de Compras para Wolt está vacía.*\n\n"
+            "🎙️ *Envía una Nota de Voz* o escribe un mensaje diciendo qué productos quieres agregar al carrito (por ejemplo: _'agrega 6 bananos, huevos grandes, leche y cápsulas de café Dolce Gusto'_)."
+        )
+        keyboard = [
+            [InlineKeyboardButton("🎙️/✏️ Agregar Productos al Carrito", callback_data="btn_prompt_cart")],
+            [InlineKeyboardButton("🏷️ Ofertas en Wolt", callback_data="btn_deals"), InlineKeyboardButton("⚙️ Ajustes", callback_data="btn_settings")]
+        ]
+        return text, InlineKeyboardMarkup(keyboard)
+
+    lines = []
+    for name, qty in items:
+        lbl = labels_map.get(name, "")
+        lbl_str = f" _({lbl})_" if lbl and lbl.lower() != name.lower() else ""
+        lines.append(f"• `{name}` × **{qty}**{lbl_str}")
+
+    items_block = "\n".join(lines)
+    flow_txt = "⚡ 1-Click Auto-Pay" if auto_pay_active else "🛡️ Safe Review (Sync a tu App)"
+
+    text = (
+        f"{header}"
+        f"🛒 *Lista de Compras Preparada ({len(items)} productos):*\n"
+        f"🏬 *Tienda:* `{store}` ({city.capitalize()})\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"{items_block}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ *Modo:* `{flow_txt}` | *Presupuesto:* `{budget_txt}`\n\n"
+        "💡 _Puedes enviar otra **nota de voz** o texto para agregar más productos o quitar alguno (ej. 'agrega 2 aguacates' o 'quita la leche'), o presiona el botón abajo para armar el carrito en Wolt._"
+    )
+    keyboard = [
+        [InlineKeyboardButton(f"🛒 Armar Carrito en Wolt ({len(items)} items)", callback_data="btn_confirm_cart")],
+        [
+            InlineKeyboardButton("🎙️/➕ Agregar o Quitar", callback_data="btn_prompt_cart"),
+            InlineKeyboardButton("🗑️ Vaciar Lista", callback_data="btn_clear_staged_cart")
+        ],
+        [
+            InlineKeyboardButton("⚡ Auto-Pay & Order", callback_data="btn_confirm_autopay"),
+            InlineKeyboardButton("⚙️ Ajustes", callback_data="btn_settings")
+        ]
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
 @auth_guard
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Welcome message and interactive main menu."""
+    """Welcome message and interactive main menu focused on Wolt Shopping Cart & Voice Notes."""
     user = update.effective_user
     user_id = user.id if user else 0
     store, city, _ = get_user_store_and_city(user_id)
@@ -432,51 +501,42 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     budget_txt = f"{budget_limit:.2f} €" if budget_limit else "No Limit (∞)"
     ver_info = get_git_version_info()
     commit_badge = f"`{ver_info.get('commit', 'latest')}`"
+    staged_count = len(user_pending_plans.get(user_id, []))
     
     welcome_text = (
-        f"👋 Hello {user.first_name if user else 'there'}!\n\n"
-        "🛒 *Wolt Smart Pantry Bot* is online.\n"
-        f"👤 *Profile ID:* `{user_id}`\n"
-        f"🏬 *Venue:* `{store}` ({city.capitalize()})\n"
-        f"💳 *Checkout Flow:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review & Sync'}`\n"
-        f"💶 *Cart Budget:* `{budget_txt}`\n"
-        f"📌 *Version:* {commit_badge}\n\n"
-        "Here is what you can do:\n"
-        "• 🌅 `/today` (or `/menu`) - Today's meals, portions & chef tips\n"
-        "• 📅 `/week [sugerencias]` - Browse 7-day schedule (or re-plan with suggestions)\n"
-        "• 📸 *Send a photo* of meals or groceries with `/stock`\n"
-        "• `/plan [sugerencias]` - Generate 7-day meal plan & Wolt cart with custom suggestions\n"
-        "• `/settings` (or `/cartflow`) - Configure Auto-Pay & Budget Limits\n"
-        "• `/budget <amount>` - Set max cart budget (e.g. `/budget 50`)\n"
-        "• `/pref` - Configure allergies, avoided foods & diet type\n"
-        "• `/pantry` - View virtual pantry memory & staples\n"
-        "• `/deals` - Explore live discounts on Wolt\n"
-        "• `/cart <items>` - Build cart directly (e.g. `/cart Banaan:6`)\n"
-        "• 👤 `/user` - View your profile, private API keys & settings\n"
-        "• `/wolt` - Inspect your isolated Wolt browser session\n"
-        "• `/help` - View complete command guide\n\n"
-        f"⏰ *Morning Schedule:* Daily menu arrives automatically at `{DAILY_MENU_TIME}` ({BOT_TIMEZONE.zone})."
+        f"👋 Hola {user.first_name if user else 'there'}!\n\n"
+        "🛒 *Wolt Smart Cart Bot* está activo.\n"
+        f"👤 *Profile ID:* `{user_id}` | 📌 *Ver:* {commit_badge}\n"
+        f"🏬 *Tienda:* `{store}` ({city.capitalize()})\n"
+        f"💳 *Checkout:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review (Sync a App)'}`\n"
+        f"💶 *Presupuesto:* `{budget_txt}`\n"
+        f"🛍️ *Items en lista actual:* **{staged_count}**\n\n"
+        "🎙️ *¡Envía Notas de Voz para armar tu carrito!*\n"
+        "• Solo graba un audio diciendo qué quieres comprar (ej. _'Necesito 6 bananos, huevos grandes, tocineta Rakvere, cebolla amarilla y cápsulas de café Dolce Gusto'_).\n"
+        "• Puedes enviar varias notas de voz seguidas para agregar o quitar productos antes de enviarlo a Wolt.\n\n"
+        "📋 *Comandos Principales:*\n"
+        "• 🎙️ *Nota de Voz / Texto* - Agrega o modifica productos de tu carrito\n"
+        "• 🛒 `/cart` - Ver tu lista actual o armar carrito (`/cart Banaan:6`)\n"
+        "• 🧾 `/receipt` - Envía PDF, foto o texto de tu recibo de Wolt para actualizar despensa\n"
+        "• 🏷️ `/deals` - Ver descuentos activos en Wolt Market\n"
+        "• ⚙️ `/settings` - Configurar presupuesto y modo de pago\n"
+        "• 🛍️ `/wolt` - Verificar sesión de Wolt"
     )
     keyboard = [
         [
-            InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu"),
-            InlineKeyboardButton("📅 Full Week Plan", callback_data="btn_week_plan")
+            InlineKeyboardButton(f"🛒 Ver / Armar Carrito ({staged_count})", callback_data="btn_view_staged_cart"),
+            InlineKeyboardButton("🎙️ Agregar Productos", callback_data="btn_prompt_cart")
         ],
         [
-            InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan"),
-            InlineKeyboardButton("✨ Plan con Sugerencias", callback_data="btn_prompt_plan_suggestions")
+            InlineKeyboardButton("🏷️ Ofertas en Wolt", callback_data="btn_deals"),
+            InlineKeyboardButton("🛍️ Sesión Wolt", callback_data="btn_wolt_status")
         ],
         [
-            InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals"),
-            InlineKeyboardButton("🛒 Custom Cart", callback_data="btn_prompt_cart")
+            InlineKeyboardButton("⚙️ Presupuesto y Pago", callback_data="btn_settings"),
+            InlineKeyboardButton("📦 Mi Despensa", callback_data="btn_pantry")
         ],
         [
-            InlineKeyboardButton("👨‍🍳 Ask Recipe", callback_data="btn_prompt_recipe"),
-            InlineKeyboardButton("⚙️ Cart & Budget", callback_data="btn_settings")
-        ],
-        [
-            InlineKeyboardButton("👤 Mi Perfil y Keys", callback_data="btn_user"),
-            InlineKeyboardButton("🏠 Pantry Memory", callback_data="btn_pantry")
+            InlineKeyboardButton("👤 Mi Perfil y Keys", callback_data="btn_user")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -486,29 +546,27 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Detailed command reference."""
     help_text = (
-        "📖 *Command Guide:*\n\n"
-        "• `/user` (or `/profile`) - View your profile, private API keys status, budget, and active settings.\n"
-        "• `/today` (or `/menu`) - Today's scheduled meals, raw-to-cooked portions & freshness reminders.\n"
-        "• `/week [sugerencias]` - 7-day full weekly meal schedule. Pass suggestions to generate a new plan (e.g. `/week platos italianos y más salmón`).\n"
-        "• `/plan [sugerencias]` - Audits pantry memory and generates a 7-day meal plan & Wolt cart with optional suggestions (e.g. `/plan comida mexicana alta en proteína`).\n"
-        "• `/settings` (or `/cartflow`) - Configure Auto-Pay flow, budget limits & store venues.\n"
-        "• `/budget <amount>` - Set maximum cart budget (e.g. `/budget 50` or `/budget 0` to disable).\n"
-        "• `/autopay [on|off]` - Toggle automated payment submission.\n"
-        "• `/pref` - Manage your allergies, disliked ingredients, and household size.\n"
-        "• `/pantry` - Shows active long-term staples (onions, oils, spices) and recent stock.\n"
-        "• `/stock` - Restock items manually (`/stock eggs 10`) or upload a photo with caption `/stock`.\n"
-        "• `/receipt` - Restock pantry from a Wolt receipt photo/screenshot or text (`/receipt 1x Eggs, 2x Bacon`).\n"
-        "• `/deals` - Scans Wolt Market for active promotional discounts.\n"
-        "• `/cart Item:Qty Item:Qty` - Adds specific items directly (e.g. `/cart Banaan:6 Rukola:1`).\n"
-        "• `/wolt` - Check your user's isolated Wolt session status.\n"
-        "• `/store <slug> [city]` - Set your preferred Wolt store venue.\n"
-        "• `/setkey <api_key>` - Set your private Gemini API key.\n"
-        "• `/stop` - Abort active cart creation, scan, or proposal.\n"
-        "• `/logs [lines]` - View live execution logs (default 25 lines).\n\n"
-        "💬 *Natural Language Supported!*\n"
-        "You can simply talk to the bot in plain English or Spanish (e.g., _'Quiero un plan con comida mexicana y alta en proteína'_, _'What should I eat for lunch?'_, _'Buy 6 bananas and arugula on Wolt'_, _'Set budget to 50 euros'_).\n\n"
-        "🛡️ *Budget & Auto-Pay Protection:*\n"
-        "If Auto-Pay is enabled, the bot checks your configured budget before placing the order. If the cart total exceeds your budget, **Auto-Pay is automatically blocked** and the cart is kept open for manual review in your phone app!"
+        "📖 *Guía de Uso — Carrito Wolt por Voz y Texto:*\n\n"
+        "🎙️ **1. Enviar Notas de Voz (Recomendado):**\n"
+        "Mantén presionado el micrófono en Telegram y di los productos que necesitas en español, inglés o estonio:\n"
+        "• _\"Agrega al carrito 6 bananos, dos paquetes de tocineta, huevos grandes y cápsulas de café Dolce Gusto\"_\n"
+        "• _\"También agrega dos aguacates y quita la leche\"_\n"
+        "• _\"Ya puedes armar el carrito en Wolt\"_\n\n"
+        "🛒 **2. Comandos de Carrito y Tienda:**\n"
+        "• `/cart` - Muestra tu lista de compras actual lista para enviar a Wolt.\n"
+        "• `/cart <productos>` - Agrega productos por texto (ej. `/cart 6 bananos, leche, huevos`).\n"
+        "• `/deals` - Escanea ofertas y descuentos en Wolt Market.\n"
+        "• `/wolt` - Verifica el estado de tu sesión en Wolt.\n"
+        "• `/store <slug> [city]` - Cambia la tienda de Wolt.\n"
+        "• `/stop` - Cancela cualquier operación en curso.\n\n"
+        "🧾 **3. Despensa y Recibos (PDF / Foto / Texto):**\n"
+        "• Envía el **archivo PDF** o **captura de pantalla** de tu factura/recibo de Wolt para actualizar tu inventario.\n"
+        "• `/pantry` - Ver inventario guardado en tu despensa.\n"
+        "• `/stock <item> <qty>` - Ajustar stock manualmente.\n\n"
+        "⚙️ **4. Configuración y Seguridad:**\n"
+        "• `/settings` - Configurar modo Safe Review vs Auto-Pay y límite de presupuesto.\n"
+        "• `/budget <monto>` - Límite máximo en euros (ej. `/budget 50`).\n"
+        "• `/user` - Ver tu perfil y estado de tus API keys (`GEMINI_API_KEY`)."
     )
     await reply_safe(update, context, help_text)
 
@@ -1170,33 +1228,75 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, sugge
     else:
         await reply_safe(update, context, plan_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-@auth_guard
-async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Direct cart assembly command: /cart Item:Qty Item:Qty"""
-    user_id = update.effective_user.id if update.effective_user else 0
+def _apply_parsed_cart_update(user_id: int, parsed_res: dict) -> list[tuple[str, int]]:
+    """Applies the AI-parsed voice or text cart update to the user's staged cart and label dictionary."""
+    action = parsed_res.get("action", "add")
+    if action == "clear":
+        user_pending_plans[user_id] = []
+        user_pending_labels[user_id] = {}
+        return []
+
+    labels = user_pending_labels.setdefault(user_id, {})
+    updated_list = parsed_res.get("updated_cart")
+    if isinstance(updated_list, list) and (updated_list or action in ["remove", "replace"]):
+        new_tuples = []
+        for it in updated_list:
+            if isinstance(it, dict) and it.get("name"):
+                name = str(it["name"]).strip()
+                qty = max(1, int(it.get("qty", 1) or 1))
+                lbl = str(it.get("label") or "").strip()
+                if lbl:
+                    labels[name] = lbl
+                new_tuples.append((name, qty))
+        user_pending_plans[user_id] = new_tuples
+        return new_tuples
+
+    added_list = parsed_res.get("items_added", [])
+    removed_list = [str(r).lower().strip() for r in parsed_res.get("items_removed", []) if r]
+    current = list(user_pending_plans.get(user_id, []))
+    cart_dict = {name: qty for name, qty in current}
+
+    for rem in removed_list:
+        for k in list(cart_dict.keys()):
+            if rem in k.lower() or rem in labels.get(k, "").lower():
+                cart_dict.pop(k, None)
+
+    for it in added_list:
+        if isinstance(it, dict) and it.get("name"):
+            name = str(it["name"]).strip()
+            qty = max(1, int(it.get("qty", 1) or 1))
+            lbl = str(it.get("label") or "").strip()
+            if lbl:
+                labels[name] = lbl
+            cart_dict[name] = cart_dict.get(name, 0) + qty
+
+    final_tuples = list(cart_dict.items())
+    user_pending_plans[user_id] = final_tuples
+    return final_tuples
+
+async def _execute_staged_cart_now(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int, status_msg=None):
+    """Launches Playwright browser automation for the user's currently staged cart items."""
+    items = user_pending_plans.get(user_id, [])
+    if not items:
+        text, markup = format_staged_cart_message(user_id)
+        if status_msg:
+            await edit_safe(status_msg, text, reply_markup=markup)
+        else:
+            await reply_safe(update, context, text, reply_markup=markup)
+        return
+
     store, city, country = get_user_store_and_city(user_id)
     cfg = get_user_config(user_id)
     auto_pay_pref = cfg.get("auto_pay", False)
     budget_limit = cfg.get("max_budget")
-    
-    args = context.args if context.args else []
-    if not args:
-        await reply_safe(update, context, "Usage: `/cart Banaan:6 Rukola:1 Kollane sibul:1`")
-        return
 
-    items = []
-    for it in args:
-        if ":" in it:
-            parts = it.rsplit(":", 1)
-            name = parts[0].strip()
-            qty = int(parts[1].strip()) if parts[1].strip().isdigit() else 1
-            items.append((name, qty))
-        else:
-            items.append((it.strip(), 1))
+    init_text = f"🛒 *Armando carrito en Wolt ({store}) con {len(items)} productos...*"
+    if status_msg:
+        await edit_safe(status_msg, init_text)
+    else:
+        status_msg = await reply_safe(update, context, init_text)
 
-    msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
-    progress_cb = create_cart_progress_updater(msg, store)
-    
+    progress_cb = create_cart_progress_updater(status_msg, store)
     try:
         res = await asyncio.to_thread(
             add_items_to_cart,
@@ -1212,18 +1312,57 @@ async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clear_existing_cart=True,
             progress_callback=progress_cb
         )
-        user_pending_plans[user_id] = items
         response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
-        if msg:
-            await edit_safe(msg, response_text, reply_markup=reply_markup)
+        if status_msg:
+            await edit_safe(status_msg, response_text, reply_markup=reply_markup)
         else:
             await reply_safe(update, context, response_text, reply_markup=reply_markup)
     except Exception as e:
         logger.error(f"Cart build failed: {e}", exc_info=True)
-        if msg:
-            await edit_safe(msg, f"⚠️ Cart build failed: {e}")
+        if status_msg:
+            await edit_safe(status_msg, f"⚠️ Error armando el carrito: {e}")
         else:
-            await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+            await reply_safe(update, context, f"⚠️ Error armando el carrito: {e}")
+
+@auth_guard
+async def cart_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Views staged shopping cart or adds items via /cart: /cart [items]"""
+    user_id = update.effective_user.id if update.effective_user else 0
+    args = context.args if context.args else []
+    if not args:
+        text, reply_markup = format_staged_cart_message(user_id)
+        await reply_safe(update, context, text, reply_markup=reply_markup)
+        return
+
+    raw_text = " ".join(args).strip()
+    # If explicit Item:Qty syntax is used for all args, parse directly and execute
+    if all(":" in it for it in args):
+        items = []
+        for it in args:
+            parts = it.rsplit(":", 1)
+            name = parts[0].strip()
+            qty = int(parts[1].strip()) if parts[1].strip().isdigit() else 1
+            items.append((name, qty))
+        user_pending_plans[user_id] = items
+        await _execute_staged_cart_now(update, context, user_id)
+        return
+
+    # Otherwise parse natural language cart items (e.g. "/cart 6 bananos, leche y huevos")
+    msg = await reply_safe(update, context, "🛒 Procesando productos para tu carrito de Wolt...")
+    current_cart = user_pending_plans.get(user_id, [])
+    parsed = await asyncio.to_thread(parse_text_cart_with_ai, raw_text, current_cart, None, user_id)
+    _apply_parsed_cart_update(user_id, parsed)
+
+    if parsed.get("execute_now") or parsed.get("action") == "execute":
+        await _execute_staged_cart_now(update, context, user_id, status_msg=msg)
+    else:
+        text, markup = format_staged_cart_message(
+            user_id,
+            transcript=None,
+            summary_note=parsed.get("summary_note")
+        )
+        await edit_safe(msg, text, reply_markup=markup)
+
 
 @auth_guard
 async def wolt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1533,7 +1672,7 @@ async def setstock_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @auth_guard
 async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Updates virtual pantry inventory directly from a Wolt receipt photo or pasted text."""
+    """Updates virtual pantry inventory directly from a Wolt receipt PDF, photo, or pasted text."""
     user_id = update.effective_user.id if update.effective_user else 0
     args = context.args if context.args else []
 
@@ -1541,13 +1680,14 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = (
             "🧾 *Update Pantry From Wolt Receipt*\n"
             "━━━━━━━━━━━━━━━━━━━━━\n"
-            "You can update your pantry inventory directly from your Wolt orders in two ways:\n\n"
-            "1. 📸 **Photo / Screenshot:**\n"
-            "   Send or forward a screenshot/photo of your Wolt app receipt, order confirmation, or delivery slip with the caption `/receipt`.\n\n"
-            "2. 📝 **Paste Text:**\n"
+            "You can update your pantry inventory directly from your Wolt orders in three ways:\n\n"
+            "1. 📄 **PDF Receipt / Invoice:**\n"
+            "   Simply send or forward the Wolt `.pdf` receipt file directly to this chat.\n\n"
+            "2. 📸 **Photo / Screenshot:**\n"
+            "   Send or forward a screenshot/photo of your Wolt app receipt with the caption `/receipt`.\n\n"
+            "3. 📝 **Paste Text:**\n"
             "   Send `/receipt` followed by your order items or pasted receipt text:\n"
-            "   `• /receipt 1x Eggo munad L, 2x Rakvere toorsuitsupeekon, 1x Dolce Gusto kapslid`\n"
-            "   `• /receipt 7x Banaan, 2x Punane paprika, 1x Rukola 100g`\n\n"
+            "   `• /receipt 1x Eggo munad L, 2x Rakvere toorsuitsupeekon, 1x Dolce Gusto kapslid`\n\n"
             "💡 *The bot will automatically recognize items & quantities and add them to your pantry memory!*"
         )
         await reply_safe(update, context, help_text)
@@ -1556,7 +1696,6 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     receipt_text = " ".join(args).strip()
     msg = await reply_safe(update, context, "🧾 Parsing Wolt receipt & updating pantry memory...")
     
-    from wolt_core.gemini import parse_receipt_text_with_ai
     items = await asyncio.to_thread(parse_receipt_text_with_ai, receipt_text, None, user_id)
     if not items:
         await edit_safe(msg, "⚠️ *No items could be extracted from the receipt text.*\n\nTry sending items in this format:\n`/receipt 1x Eggo munad L, 2x Rakvere peekon, 1x Dolce Gusto kohvikapslid`")
@@ -1566,17 +1705,161 @@ async def receipt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     restock_text = restock_text.replace("📦 *Pantry Restock Successful!*", "🧾 *Wolt Receipt Processed & Pantry Updated!*")
     keyboard = [
         [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
-        [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
+        [InlineKeyboardButton("🛒 View / Build Cart", callback_data="btn_view_staged_cart")]
     ]
     await edit_safe(msg, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 @auth_guard
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles uploaded meal plates, Wolt receipts, or grocery restock photos with vision AI analysis."""
-    if not update.message or not update.message.photo:
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles Telegram voice notes and audio messages to build or modify the Wolt shopping cart."""
+    if not update.message:
         return
     user_id = update.effective_user.id if update.effective_user else 0
-    photo = update.message.photo[-1]
+    voice_obj = update.message.voice or update.message.audio
+    if not voice_obj and update.message.document:
+        voice_obj = update.message.document
+    if not voice_obj:
+        return
+
+    # Clear any pending text prompt waiting state if user sent a voice note for cart
+    if user_id in user_waiting_state and user_waiting_state[user_id].get("action") == "set_cart":
+        user_waiting_state.pop(user_id, None)
+
+    msg = await reply_safe(
+        update,
+        context,
+        "🎙️ *Escuchando tu nota de voz y preparando los productos para tu carrito de Wolt...*"
+    )
+
+    os.makedirs("scratch", exist_ok=True)
+    mime_type = getattr(voice_obj, "mime_type", None) or "audio/ogg"
+    ext = ".ogg"
+    if "mp3" in mime_type or "mpeg" in mime_type:
+        ext = ".mp3"
+    elif "mp4" in mime_type or "m4a" in mime_type:
+        ext = ".m4a"
+    elif "wav" in mime_type:
+        ext = ".wav"
+
+    save_path = os.path.join("scratch", f"telegram_voice_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}")
+    try:
+        tg_file = await voice_obj.get_file()
+        await tg_file.download_to_drive(save_path)
+        logger.info(f"Saved voice note for user {user_id} to: {save_path} ({mime_type})")
+    except Exception as e:
+        logger.error(f"Failed to download voice note: {e}")
+        await edit_safe(msg, f"⚠️ Error descargando la nota de voz: {e}")
+        return
+
+    current_cart = user_pending_plans.get(user_id, [])
+    parsed = await asyncio.to_thread(
+        parse_voice_cart_with_ai,
+        save_path,
+        current_cart,
+        None,
+        user_id,
+        mime_type
+    )
+
+    if parsed.get("error"):
+        err_type = parsed.get("error")
+        if err_type == "missing_api_key":
+            await edit_safe(
+                msg,
+                "🔑 *Configura tu Gemini API Key para Notas de Voz*\n\n"
+                "Para que el bot escuche tus notas de voz y arme tu carrito de Wolt automáticamente, configura tu API key de Google Gemini:\n"
+                "`/setkey TU_API_KEY`\n\n"
+                "_(Puedes obtenerla gratis en https://aistudio.google.com)_"
+            )
+            return
+        await edit_safe(
+            msg,
+            f"⚠️ *No se pudo procesar la nota de voz:*\n_{parsed.get('message', 'Error desconocido')}_"
+        )
+        return
+
+    _apply_parsed_cart_update(user_id, parsed)
+    transcript = parsed.get("transcript", "")
+    summary_note = parsed.get("summary_note", "")
+
+    if (parsed.get("execute_now") or parsed.get("action") == "execute") and user_pending_plans.get(user_id):
+        if transcript:
+            await edit_safe(msg, f"🎙️ *Transcripción:* _{transcript}_\n\n🛒 *Iniciando armado de carrito en Wolt...*")
+        await _execute_staged_cart_now(update, context, user_id, status_msg=msg)
+        return
+
+    text, reply_markup = format_staged_cart_message(
+        user_id,
+        transcript=transcript,
+        summary_note=summary_note
+    )
+    await edit_safe(msg, text, reply_markup=reply_markup)
+
+@auth_guard
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles uploaded PDF receipts to update pantry stock, or delegates image/audio documents."""
+    if not update.message or not update.message.document:
+        return
+    doc = update.message.document
+    mime = (doc.mime_type or "").lower()
+    fname = (doc.file_name or "document").lower()
+
+    if mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        await photo_handler(update, context)
+        return
+
+    if mime.startswith("audio/") or fname.endswith((".ogg", ".oga", ".mp3", ".m4a", ".wav")):
+        await voice_handler(update, context)
+        return
+
+    if "pdf" in mime or fname.endswith(".pdf"):
+        user_id = update.effective_user.id if update.effective_user else 0
+        msg = await reply_safe(update, context, f"📄 *Procesando recibo PDF de Wolt (`{doc.file_name}`)...*")
+        os.makedirs("scratch", exist_ok=True)
+        save_path = os.path.join("scratch", f"telegram_pdf_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+        try:
+            doc_file = await doc.get_file()
+            await doc_file.download_to_drive(save_path)
+            logger.info(f"Saved uploaded PDF receipt for user {user_id} to: {save_path}")
+        except Exception as e:
+            await edit_safe(msg, f"⚠️ Error descargando el PDF: {e}")
+            return
+
+        items = await asyncio.to_thread(parse_pdf_receipt, save_path, None, user_id)
+        if not items:
+            await edit_safe(
+                msg,
+                "⚠️ *No se detectaron productos de supermercado en el archivo PDF.*\n\n"
+                "Verifica que sea un recibo o factura de Wolt válida, o envía una captura de pantalla."
+            )
+            return
+
+        restock_text, _ = restock_pantry_from_detected_items(
+            items,
+            source="wolt_pdf_receipt",
+            photo_path=save_path,
+            user_id=user_id
+        )
+        restock_text = restock_text.replace(
+            "📦 *Pantry Restock Successful!*",
+            f"🧾 *Wolt PDF Receipt Processed & Pantry Updated!*\n📄 `{doc.file_name}`"
+        )
+        keyboard = [
+            [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
+            [InlineKeyboardButton("🛒 View / Build Cart", callback_data="btn_view_staged_cart")]
+        ]
+        await edit_safe(msg, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+@auth_guard
+async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles uploaded meal plates, Wolt receipts, or grocery restock photos with vision AI analysis."""
+    if not update.message:
+        return
+    user_id = update.effective_user.id if update.effective_user else 0
+    photo = update.message.photo[-1] if update.message.photo else update.message.document
+    if not photo:
+        return
     caption = (update.message.caption or "").strip()
     is_receipt = any(w in caption.lower() for w in ["/receipt", "receipt", "recibo", "wolt", "tšekk", "factura", "order", "pedido", "invoice"])
     is_stock_caption = is_receipt or "/stock" in caption.lower() or caption.lower().startswith("stock") or "restock" in caption.lower()
@@ -2076,11 +2359,21 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             "Please reply with the Wolt store venue slug and optional city (e.g. `wolt-market-maakri tallinn`) or send `/cancel` to abort:",
             parse_mode="Markdown"
         )
+    elif data == "btn_view_staged_cart":
+        text, markup = format_staged_cart_message(user_id)
+        await query_edit_safe(query, text, reply_markup=markup)
+    elif data == "btn_clear_staged_cart":
+        user_pending_plans[user_id] = []
+        user_pending_labels[user_id] = {}
+        text, markup = format_staged_cart_message(user_id, summary_note="🗑️ Lista de compras vaciada.")
+        await query_edit_safe(query, text, reply_markup=markup)
     elif data == "btn_prompt_cart":
         user_waiting_state[user_id] = {"action": "set_cart"}
         await query.message.reply_text(
-            "🛒 *Build Custom Wolt Cart*\n\n"
-            "Please reply with the items and quantities you want (e.g. `Banaan:6 Rukola:1 Munad:1`) or send `/cancel` to abort:",
+            "🎙️🛒 *Agregar o Modificar tu Carrito de Wolt*\n\n"
+            "• **Envía una Nota de Voz** diciendo qué productos necesitas (ej. _'agrega 6 bananos, dos paquetes de tocineta, huevos grandes y cápsulas de café Dolce Gusto'_)\n"
+            "• O **escribe por texto** los productos que quieres agregar o quitar (ej. `6 bananos, leche, huevos` o `quita la cebolla`)\n\n"
+            "Envía `/cancel` para abortar:",
             parse_mode="Markdown"
         )
     elif data == "btn_prompt_recipe":
@@ -2186,54 +2479,31 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
         elif action == "set_cart":
             parts = user_text.split()
-            items = []
-            for it in parts:
-                if ":" in it:
+            if parts and all(":" in it for it in parts):
+                items = []
+                for it in parts:
                     p = it.rsplit(":", 1)
                     name = p[0].strip()
                     qty = int(p[1].strip()) if p[1].strip().isdigit() else 1
                     items.append((name, qty))
-                else:
-                    items.append((it.strip(), 1))
-            
-            if not items:
-                await reply_safe(update, context, "⚠️ No items found. Usage example: `Banaan:6 Rukola:1`")
-                return
-            
-            store, city, country = get_user_store_and_city(user_id)
-            cfg = get_user_config(user_id)
-            auto_pay_pref = cfg.get("auto_pay", False)
-            budget_limit = cfg.get("max_budget")
-            msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items)} items on {store}...")
-            progress_cb = create_cart_progress_updater(msg, store)
-            
-            try:
-                res = await asyncio.to_thread(
-                    add_items_to_cart,
-                    store,
-                    items,
-                    city=city,
-                    country=country,
-                    keep_open=False,
-                    record_memory=False,
-                    auto_pay=auto_pay_pref,
-                    user_id=user_id,
-                    budget=budget_limit,
-                    clear_existing_cart=True,
-                    progress_callback=progress_cb
-                )
                 user_pending_plans[user_id] = items
-                response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
-                if msg:
-                    await edit_safe(msg, response_text, reply_markup=reply_markup)
-                else:
-                    await reply_safe(update, context, response_text, reply_markup=reply_markup)
-            except Exception as e:
-                logger.error(f"Cart build failed: {e}", exc_info=True)
-                if msg:
-                    await edit_safe(msg, f"⚠️ Cart build failed: {e}")
-                else:
-                    await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+                await _execute_staged_cart_now(update, context, user_id)
+                return
+
+            msg = await reply_safe(update, context, "🛒 Procesando productos para tu lista de compras de Wolt...")
+            current_cart = user_pending_plans.get(user_id, [])
+            parsed = await asyncio.to_thread(parse_text_cart_with_ai, user_text, current_cart, None, user_id)
+            _apply_parsed_cart_update(user_id, parsed)
+
+            if (parsed.get("execute_now") or parsed.get("action") == "execute") and user_pending_plans.get(user_id):
+                await _execute_staged_cart_now(update, context, user_id, status_msg=msg)
+            else:
+                text, markup = format_staged_cart_message(
+                    user_id,
+                    transcript=None,
+                    summary_note=parsed.get("summary_note")
+                )
+                await edit_safe(msg, text, reply_markup=markup)
             return
 
         elif action == "get_recipe":
@@ -2344,7 +2614,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             cfg = get_user_config(user_id)
             cfg["gemini_api_key"] = k_val
             save_user_config(cfg, user_id=user_id)
-            await reply_safe(update, context, "✅ *Gemini API Key Guardada!*\n\nReconocimiento visual y chef dinámico ahora están activos para tu usuario.")
+            await reply_safe(update, context, "✅ *Gemini API Key Guardada!*\n\nReconocimiento de notas de voz, PDF y visión ahora están activos para tu usuario.")
         else:
             await setkey_command(update, context)
     elif intent == "set_jev":
@@ -2386,7 +2656,7 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         text, _ = log_meal_consumption(meal_t, user_id=user_id)
         keyboard = [
             [InlineKeyboardButton("📦 View Remaining Pantry", callback_data="btn_pantry")],
-            [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+            [InlineKeyboardButton("🛒 View / Build Cart", callback_data="btn_view_staged_cart")]
         ]
         await reply_safe(update, context, text, reply_markup=InlineKeyboardMarkup(keyboard))
     elif intent == "set_budget":
@@ -2461,7 +2731,6 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         day_idx = min(6, max(0, now.weekday()))
         day_data = days[day_idx] if days and day_idx < len(days) else {}
 
-        # If user asks for lunch or dinner, anchor with today's scheduled meal ingredients
         ingredients = []
         low_d = dish_name.lower()
         if "lunch" in low_d or "almuerzo" in low_d:
@@ -2489,12 +2758,11 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 InlineKeyboardButton("🍲 Dinner Recipe", callback_data="btn_recipe_dinner")
             ],
             [
-                InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu"),
+                InlineKeyboardButton("🛒 View / Build Cart", callback_data="btn_view_staged_cart"),
                 InlineKeyboardButton("📦 Pantry Stock", callback_data="btn_pantry")
             ]
         ]
         
-        # If the user has a pending weekly cart and ordered extra servings for guests/special meal, offer 1-click merge
         h_size = prefs.get("household_size", 1)
         if user_id in user_pending_plans and final_servings > h_size:
             extra_count = final_servings - h_size
@@ -2526,65 +2794,51 @@ async def text_message_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             restock_text, _ = restock_pantry_from_detected_items(items_extracted, source="nl_restock", user_id=user_id)
             keyboard = [
                 [InlineKeyboardButton("📦 View Full Pantry", callback_data="btn_pantry")],
-                [InlineKeyboardButton("📋 Generate Plan with New Stock", callback_data="btn_plan")]
+                [InlineKeyboardButton("🛒 View / Build Cart", callback_data="btn_view_staged_cart")]
             ]
             await reply_safe(update, context, restock_text, reply_markup=InlineKeyboardMarkup(keyboard))
         else:
             await setstock_command(update, context)
     elif intent == "build_cart":
-        items_extracted = params.get("items", [])
-        if items_extracted:
-            items_tuples = [(it["name"], it.get("qty", 1)) for it in items_extracted]
+        msg = await reply_safe(update, context, "🛒 Procesando productos para tu carrito de Wolt...")
+        current_cart = user_pending_plans.get(user_id, [])
+        parsed = await asyncio.to_thread(parse_text_cart_with_ai, user_text, current_cart, None, user_id)
+        updated = _apply_parsed_cart_update(user_id, parsed)
+        if not updated and params.get("items"):
+            items_tuples = [(it["name"], it.get("qty", 1)) for it in params["items"] if it.get("name")]
             user_pending_plans[user_id] = items_tuples
-            store, city, country = get_user_store_and_city(user_id)
-            cfg = get_user_config(user_id)
-            auto_pay_pref = cfg.get("auto_pay", False)
-            budget_limit = cfg.get("max_budget")
-            msg = await reply_safe(update, context, f"🛒 Launching browser automation for {len(items_tuples)} items on {store}...")
-            progress_cb = create_cart_progress_updater(msg, store)
-            try:
-                res = await asyncio.to_thread(
-                    add_items_to_cart,
-                    store,
-                    items_tuples,
-                    city=city,
-                    country=country,
-                    keep_open=False,
-                    record_memory=False,
-                    auto_pay=auto_pay_pref,
-                    user_id=user_id,
-                    budget=budget_limit,
-                    clear_existing_cart=True,
-                    progress_callback=progress_cb
-                )
-                response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
-                if msg:
-                    await edit_safe(msg, response_text, reply_markup=reply_markup)
-                else:
-                    await reply_safe(update, context, response_text, reply_markup=reply_markup)
-            except Exception as e:
-                logger.error(f"Cart build failed: {e}", exc_info=True)
-                if msg:
-                    await edit_safe(msg, f"⚠️ Cart build failed: {e}")
-                else:
-                    await reply_safe(update, context, f"⚠️ Cart build failed: {e}")
+            updated = items_tuples
+
+        if (parsed.get("execute_now") or parsed.get("action") == "execute") and updated:
+            await _execute_staged_cart_now(update, context, user_id, status_msg=msg)
+        elif updated:
+            text, markup = format_staged_cart_message(
+                user_id,
+                transcript=None,
+                summary_note=parsed.get("summary_note")
+            )
+            await edit_safe(msg, text, reply_markup=markup)
         else:
             user_waiting_state[user_id] = {"action": "set_cart"}
-            await reply_safe(update, context, "🛒 *What items would you like to add to your Wolt cart?*\n\nSend items with quantities (e.g. `Banaan:6 Rukola:1 Sibul:1`) or `/cancel` to abort:")
+            await edit_safe(
+                msg,
+                "🎙️🛒 *¿Qué productos quieres agregar a tu carrito de Wolt?*\n\n"
+                "Envía una **Nota de Voz** o escribe los productos con cantidades (ej. `6 bananos, leche, huevos y café en cápsulas`) o `/cancel` para abortar:"
+            )
     else:
-        # chef_chat fallback
-        chef_reply = nlu_result.get("chef_reply") or "👨‍🍳 I'm here to help with your meals, pantry, store deals, and Wolt carts! What would you like to cook or plan today?"
+        # Cart-focused assistant fallback
+        chef_reply = nlu_result.get("chef_reply") or "🛒 ¡Estoy listo para armar tu carrito en Wolt! Envíame una **Nota de Voz** o texto con los productos que necesitas comprar."
         keyboard = [
             [
-                InlineKeyboardButton("🌅 Today's Menu", callback_data="btn_today_menu"),
-                InlineKeyboardButton("📋 Generate Plan", callback_data="btn_plan")
+                InlineKeyboardButton("🛒 Ver / Armar Carrito", callback_data="btn_view_staged_cart"),
+                InlineKeyboardButton("🎙️ Agregar Productos", callback_data="btn_prompt_cart")
             ],
             [
-                InlineKeyboardButton("🏷️ Active Deals", callback_data="btn_deals"),
-                InlineKeyboardButton("📦 Pantry Status", callback_data="btn_pantry")
+                InlineKeyboardButton("🏷️ Ofertas en Wolt", callback_data="btn_deals"),
+                InlineKeyboardButton("📦 Mi Despensa", callback_data="btn_pantry")
             ]
         ]
-        await reply_safe(update, context, f"👨‍🍳 {chef_reply}", reply_markup=InlineKeyboardMarkup(keyboard))
+        await reply_safe(update, context, f"🛒 {chef_reply}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Logs uncaught exceptions and sends a helpful message to the user."""
@@ -2663,7 +2917,8 @@ async def check_and_notify_deployment(application):
                 f"📌 *Nueva Versión / Commit:* `{curr_commit}`\n"
                 f"📝 *Cambios:* _{ver.get('message', 'Actualización del sistema')}_\n"
                 f"🕒 *Fecha:* `{ver.get('date', now_str)}`\n\n"
-                "✅ *El bot se ha reiniciado correctamente y está listo para recibir comandos.*"
+                "🎙️ *Novedad:* Ahora puedes enviar **Notas de Voz** diciendo qué productos quieres agregar o quitar de tu carrito de Wolt.\n"
+                "✅ *El bot se ha reiniciado correctamente y está listo.*"
             )
 
             for uid in active_users:
@@ -2682,35 +2937,24 @@ async def check_and_notify_deployment(application):
 async def post_init(application):
     """Registers bot autocomplete command suggestions with Telegram API and notifies on deployment."""
     commands = [
-        BotCommand("today", "🌅 Today's scheduled meals, portions & tips"),
-        BotCommand("menu", "🌅 View today's full menu"),
-        BotCommand("recipe", "👨‍🍳 Get AI step-by-step recipe (/recipe lunch)"),
-        BotCommand("breakfast", "🍳 View breakfast food quantities & tips"),
-        BotCommand("lunch", "🥗 View lunch ingredients & portions"),
-        BotCommand("dinner", "🍲 View dinner ingredients & portions"),
-        BotCommand("snack", "🍎 View today's healthy snack"),
-        BotCommand("eat", "✅ Log a meal & deduct ingredients (/eat breakfast)"),
-        BotCommand("week", "📅 Browse 7-day scheduled meal plan"),
-        BotCommand("plan", "📋 Generate 7-day meal plan & Wolt cart list"),
+        BotCommand("cart", "🛒 Ver tu lista de compras o armar carrito en Wolt"),
+        BotCommand("wolt", "🛍️ Verificar sesión de Wolt y tienda activa"),
+        BotCommand("deals", "🏷️ Ver ofertas y descuentos activos en Wolt"),
+        BotCommand("receipt", "🧾 Actualizar despensa con recibo PDF, foto o texto"),
+        BotCommand("pantry", "🏠 Ver inventario guardado en tu despensa"),
+        BotCommand("stock", "📦 Ajustar stock de un producto (/stock eggs 10)"),
+        BotCommand("settings", "⚙️ Configurar Auto-Pay y Límite de Presupuesto"),
+        BotCommand("budget", "💶 Definir presupuesto máximo (/budget 50)"),
+        BotCommand("autopay", "💳 Activar/desactivar pago automático (/autopay on|off)"),
+        BotCommand("store", "🏬 Cambiar tienda de Wolt (/store wolt-market-maakri)"),
         BotCommand("user", "👤 Ver tu perfil, API keys y configuración activa"),
-        BotCommand("settings", "⚙️ Configure Auto-Pay & Budget Limits"),
-        BotCommand("budget", "💶 Set max cart budget (/budget 50)"),
-        BotCommand("autopay", "💳 Toggle auto payment (/autopay on|off)"),
-        BotCommand("pref", "👤 Dietary profile, allergies & household size"),
-        BotCommand("pantry", "🏠 View virtual pantry memory & stock"),
-        BotCommand("stock", "📦 Adjust ingredient stock (/stock eggs 10)"),
-        BotCommand("receipt", "🧾 Restock pantry from Wolt receipt (photo or text)"),
-        BotCommand("deals", "🏷️ Scan live discount deals on Wolt"),
-        BotCommand("cart", "🛒 Build Wolt cart directly (/cart Banaan:6)"),
-        BotCommand("wolt", "🛍️ Check isolated Wolt browser session"),
-        BotCommand("store", "🏬 Change Wolt store venue (/store wolt-market-maakri)"),
+        BotCommand("setkey", "🔑 Configurar Gemini API key para voz y visión"),
+        BotCommand("setjev", "⚡ Configurar Jev AI key para enrutamiento NLU"),
         BotCommand("version", "📌 Ver versión y commit activo del bot"),
-        BotCommand("setkey", "🔑 Configure Gemini API key for photo vision"),
-        BotCommand("setjev", "⚡ Configure Jev AI key for sub-200ms decision routing"),
-        BotCommand("stop", "🛑 Abort running cart creation or scan"),
-        BotCommand("logs", "📜 View live system logs on PC (/logs 25)"),
-        BotCommand("help", "📖 View complete command guide"),
-        BotCommand("start", "👋 Welcome dashboard & main menu")
+        BotCommand("stop", "🛑 Cancelar armado de carrito o escaneo en curso"),
+        BotCommand("logs", "📜 Ver logs recientes del sistema (/logs 25)"),
+        BotCommand("help", "📖 Guía completa de uso por voz y texto"),
+        BotCommand("start", "👋 Menú principal del carrito de Wolt")
     ]
     try:
         await application.bot.set_my_commands(commands)
@@ -2772,15 +3016,17 @@ def main():
     app.add_handler(CommandHandler("wolt", wolt_command))
     app.add_handler(CommandHandler("store", store_command))
     app.add_handler(CommandHandler("logs", logs_command))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, photo_handler))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message_handler))
     app.add_handler(CallbackQueryHandler(button_callback_handler))
 
     # Global error handler
     app.add_error_handler(global_error_handler)
 
-    # Schedule Daily 09:00 AM Morning Menu Broadcast
-    if app.job_queue:
+    # Daily morning menu broadcast is disabled by default so the bot focuses on Wolt cart operations
+    if os.getenv("ENABLE_DAILY_MENU", "false").lower() == "true" and app.job_queue:
         hour, minute = 9, 0
         try:
             parts = DAILY_MENU_TIME.split(":")
@@ -2796,7 +3042,7 @@ def main():
         )
         logger.info(f"[*] Daily morning menu broadcast scheduled for {hour:02d}:{minute:02d} ({BOT_TIMEZONE.zone})")
     else:
-        logger.warning("[!] Job queue not available. Morning broadcasts will not run.")
+        logger.info("[*] Daily morning menu broadcast disabled (cart-focused mode active).")
 
     logger.info("Bot is online and listening for Telegram updates.")
     try:

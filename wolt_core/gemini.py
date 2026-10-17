@@ -290,9 +290,9 @@ Classify into one of these intents:
 - "recipe": Asking for a cooking recipe or culinary technique for a dish or ingredients.
 - "week_plan": Asking to browse the 7-day scheduled weekly meal plan (may contain custom suggestions or requests).
 - "plan_week": Asking to generate a fresh 7-day meal plan or itemized grocery list (may contain custom suggestions like 'mexican food', 'high protein', 'more salmon', 'no dairy').
-- "build_cart": Requesting to buy items or build a cart on Wolt.
+- "build_cart": Requesting to buy, add, remove, or modify items in the Wolt shopping cart, or listing grocery products/quantities to order (e.g. "agrega 6 bananos y leche", "necesito huevos y café", "quita la cebolla", "add milk and eggs", "arma el carrito"). This is the PRIMARY default intent whenever the user mentions grocery items!
 - "log_meal": Stating they ate a meal or specific food items (e.g. "I ate lunch", "ate 2 eggs").
-- "restock": Reporting groceries bought or adjusting inventory (e.g. "bought 10 eggs", "restock chicken").
+- "restock": Reporting groceries already bought to update pantry stock (e.g. "ya compré 10 huevos", "restock chicken in pantry").
 - "pantry_status": Checking what food/ingredients are in the fridge, pantry, or inventory.
 - "deals": Asking for discounts, sales, or store deals on Wolt.
 - "set_budget": Setting or changing the shopping budget ceiling.
@@ -301,7 +301,7 @@ Classify into one of these intents:
 - "preferences": Changing dietary preferences, allergies, or household size.
 - "wolt_status": Asking about Wolt browser login session.
 - "stop": Asking to stop, cancel, or abort an operation.
-- "chef_chat": General food, nutrition, culinary question, or greeting.
+- "chef_chat": General greeting or non-shopping question.
 
 Respond ONLY with a valid JSON object matching this schema:
 {{
@@ -393,7 +393,7 @@ Respond ONLY with a valid JSON object matching this schema:
         return {"intent": "today_menu", "parameters": {"meal_type": meal_type}}
         
     # 6. Week Plan / Generate Plan with suggestions
-    if any(w in low for w in ["plan", "semana", "week", "schedule", "7 day", "calendar", "shopping list", "groceries plan"]):
+    if any(w in low for w in ["plan", "semana", "week", "schedule", "7 day", "calendar", "groceries plan"]):
         sug_text = user_text
         for kw in ["planifica", "plan", "semana", "week", "menu de la semana", "generate plan", "crea un plan"]:
             if kw in low:
@@ -403,7 +403,7 @@ Respond ONLY with a valid JSON object matching this schema:
         return {"intent": "plan_week", "parameters": {"user_suggestions": sug_text if len(sug_text) > 3 else None, "query": user_text}}
         
     # 8. Build Cart
-    if any(w in low for w in ["buy", "order", "cart", "add to basket", "wolt cart", "assemble cart", "compra", "carrito"]):
+    if any(w in low for w in ["buy", "order", "cart", "add", "remove", "agrega", "agregar", "pon", "poner", "quita", "quitar", "necesito", "quiero comprar", "add to basket", "wolt cart", "assemble cart", "compra", "carrito", "pedido", "lista"]):
         return {"intent": "build_cart", "parameters": {"query": user_text}}
         
     # 9. Eat / Log meal
@@ -603,7 +603,10 @@ Respond ONLY with a valid JSON object matching this schema:
     api_key = api_key.strip()
 
     def _optimize_image_for_vision(src_path: str, max_dim=1280, quality=85) -> tuple[bytes, str]:
-        """Compresses and scales high-res smartphone images to ~150KB to prevent network timeouts."""
+        """Compresses and scales high-res smartphone images to ~150KB to prevent network timeouts, or reads PDF bytes."""
+        if src_path.lower().endswith(".pdf"):
+            with open(src_path, "rb") as f:
+                return f.read(), "application/pdf"
         try:
             from PIL import Image, ImageOps
             import io
@@ -640,14 +643,18 @@ Respond ONLY with a valid JSON object matching this schema:
     for model_name in models_to_try:
         try:
             from google import genai
+            from google.genai import types
             from PIL import Image
             import io
             client = genai.Client(api_key=api_key)
-            img_bytes, _ = _optimize_image_for_vision(image_path)
-            pil_img = Image.open(io.BytesIO(img_bytes))
+            img_bytes, mime_type = _optimize_image_for_vision(image_path)
+            if mime_type == "application/pdf":
+                media_part = types.Part.from_bytes(data=img_bytes, mime_type="application/pdf")
+            else:
+                media_part = Image.open(io.BytesIO(img_bytes))
             resp = client.models.generate_content(
                 model=model_name,
-                contents=[prompt, pil_img]
+                contents=[prompt, media_part]
             )
             if resp and resp.text:
                 clean = resp.text.strip()
@@ -669,9 +676,12 @@ Respond ONLY with a valid JSON object matching this schema:
             import io
             legacy_genai.configure(api_key=api_key)
             model = legacy_genai.GenerativeModel(model_name)
-            img_bytes, _ = _optimize_image_for_vision(image_path)
-            pil_img = Image.open(io.BytesIO(img_bytes))
-            resp = model.generate_content([prompt, pil_img])
+            img_bytes, mime_type = _optimize_image_for_vision(image_path)
+            if mime_type == "application/pdf":
+                media_part = {"mime_type": "application/pdf", "data": img_bytes}
+            else:
+                media_part = Image.open(io.BytesIO(img_bytes))
+            resp = model.generate_content([prompt, media_part])
             if resp and resp.text:
                 clean = resp.text.strip()
                 if clean.startswith("```"):
@@ -809,6 +819,360 @@ Rules:
             cat = "protein" if any(w in name_low for w in ["muna", "egg", "kana", "hakkliha", "veis", "peekon", "bacon", "kala"]) else ("produce" if any(w in name_low for w in ["tomat", "kurk", "paprika", "banaan", "sibul", "avokaado"]) else "staple")
             results.append({"name": clean_name.title(), "qty": qty, "unit": "pack", "category": cat})
     return results
+
+def parse_pdf_receipt(pdf_path: str, api_key: str = None, user_id=None) -> list[dict]:
+    """Extracts grocery items from a Wolt PDF receipt using pypdf local text extraction with multimodal Gemini PDF fallback."""
+    if not os.path.exists(pdf_path):
+        return []
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
+
+    extracted_text = ""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(pdf_path)
+        pages_text = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                pages_text.append(t)
+        extracted_text = "\n".join(pages_text).strip()
+    except Exception:
+        extracted_text = ""
+
+    if extracted_text and len(extracted_text) > 20:
+        items = parse_receipt_text_with_ai(extracted_text, api_key=api_key, user_id=user_id)
+        if items:
+            return items
+
+    # Multimodal fallback for scanned/image-based PDFs
+    res = analyze_photo_with_vision(pdf_path, api_key=api_key, user_id=user_id)
+    if isinstance(res, dict) and res.get("detected_items"):
+        return res["detected_items"]
+    return []
+
+
+_CART_MAPPING_RULES = """
+CRITICAL ESTONIAN WOLT MARKET PRODUCT MAPPING RULES:
+Map any spoken or written grocery item (in Spanish, English, or Estonian) to the exact Estonian Wolt Market search query (`name`):
+- Coffee capsules / cápsulas de café / Dolce Gusto -> "Dolce Gusto Café Au Lait kohvikapslid" (or "Dolce Gusto kohvikapslid" if generic capsules). NEVER use ground press coffee ("presskannukohv") if capsules are requested or in user preferences!
+- Onion / cebolla / yellow onion / cebolla blanca o amarilla -> "Mugulsibul" (NEVER "Roheline sibul" / Green onion unless the user explicitly asks for green onion / cebollín / spring onion!).
+- Red onion / cebolla morada o roja -> "Punane sibul"
+- Garlic / ajo -> "Küüslauk"
+- Eggs / huevos -> "Eggo suured munad L 10tk"
+- Bacon / tocineta / tocino -> "Rakvere toorsuitsupeekon"
+- Chicken breast / pechuga de pollo / pollo -> "Tallegg Broilerifilee"
+- Ground beef / carne molida / picada -> "Veisehakkliha"
+- Pork / cerdo -> "Sealiha"
+- Salmon / salmón -> "Lõhefilee"
+- Bananas / bananos / plátanos -> "Banaan"
+- Avocado / aguacate -> "Avokaado"
+- Bell pepper / pimentón / pimiento / paprika -> "Punane paprika"
+- Cherry tomatoes / tomates cherry -> "Kirsstomat"
+- Tomatoes / tomates -> "Tomat"
+- Cucumber / pepino -> "Luunja kurk"
+- Potatoes / papas / patatas -> "Kartul"
+- Spinach / espinaca -> "Spinat"
+- Arugula / rúcula -> "Rukola"
+- Milk / leche -> "Tere piim" (or "Tere laktoosivaba piim" if lactose-free / deslactosada)
+- Butter / mantequilla -> "Taluvõi"
+- Grated cheese / queso rallado -> "Riivjuust"
+- Mozzarella / queso mozzarella -> "Mozzarella"
+- Cheese slices / queso tajado -> "Viilutatud juust"
+- Cream / crema de leche / nata -> "Vahukoor" or "Kohvikoor"
+- Greek yogurt / yogur griego -> "Kreeka jogurt"
+- Bread / pan tajado / pan de molde / toast -> "Röstsai"
+- Tortillas / fajitas -> "Tortilla"
+- Rice / arroz -> "Basmati riis"
+- Pasta / espagueti / macarrones -> "Pasta"
+- Olive oil / aceite de oliva -> "Oliiviõli"
+- Lemon / limón -> "Sidrun"
+- Water / agua -> "Vesi"
+- Orange juice / jugo de naranja -> "Apelsinimahl"
+For any other item, provide the most accurate Estonian supermarket search term (or well-known brand in Estonia) as `name`, and keep the user's friendly language description in `label`.
+"""
+
+def _build_cart_prompt(current_cart: list = None, user_context_text: str = "") -> str:
+    staged_str = "Empty (no items staged yet)"
+    if current_cart:
+        formatted = []
+        for it in current_cart:
+            if isinstance(it, (tuple, list)) and len(it) >= 2:
+                formatted.append(f"- {it[0]} (qty: {it[1]})")
+            elif isinstance(it, dict):
+                formatted.append(f"- {it.get('name')} (qty: {it.get('qty', 1)})")
+        if formatted:
+            staged_str = "\n".join(formatted)
+
+    return f"""
+You are the smart Wolt Shopping Cart voice & text assistant for Estonia (Wolt Market).
+Current Staged Shopping Cart before this message:
+{staged_str}
+
+{user_context_text}
+
+{_CART_MAPPING_RULES}
+
+Your task:
+1. Transcribe what the user said (`transcript`).
+2. Understand how the user wants to modify or build their Wolt shopping cart:
+   - "add": User is naming items to buy or adding items to the current staged cart.
+   - "replace": User explicitly asks to clear/start over with a new list (e.g. "borra todo y pon solo...", "new cart from scratch with..."). Note: if Current Staged Shopping Cart is Empty, "add" and "replace" both create the list.
+   - "remove": User is removing specific items from the current staged cart (e.g. "quita la cebolla", "remove the milk").
+   - "clear": User wants to empty the entire staged cart.
+   - "execute": User is not adding new items, just saying "build the cart on Wolt now" / "ya puedes comprar" / "haz el pedido".
+3. Set `execute_now` to `true` ONLY IF the user explicitly instructs to launch/execute the order on Wolt immediately in this message (e.g., "agrega leche y arma el carrito de una vez", "ya mándalo a Wolt", "build the cart on Wolt now"). Otherwise set `execute_now` to `false` so the user can review the staged list first.
+4. Compute `updated_cart`: the complete resulting list of items in the cart after applying the user's additions, quantity changes, or removals to the Current Staged Shopping Cart.
+
+Respond ONLY with a valid JSON object matching this exact schema:
+{{
+  "transcript": "<exact transcription of what the user said>",
+  "action": "add" | "replace" | "remove" | "clear" | "execute",
+  "execute_now": true | false,
+  "items_added": [
+    {{
+      "name": "<Estonian Wolt Market search query>",
+      "label": "<Friendly name in user's language>",
+      "qty": <int>
+    }}
+  ],
+  "items_removed": ["<name of removed item>"],
+  "updated_cart": [
+    {{
+      "name": "<Estonian Wolt Market search query>",
+      "label": "<Friendly name in user's language>",
+      "qty": <int>
+    }}
+  ],
+  "summary_note": "<1 short friendly sentence in the user's language confirming the cart update>"
+}}
+"""
+
+def parse_voice_cart_with_ai(audio_path: str, current_cart: list = None, api_key: str = None, user_id=None, mime_type: str = "audio/ogg") -> dict:
+    """Processes a Telegram voice note or audio file with Gemini multimodal audio to extract and update the Wolt shopping cart."""
+    if not os.path.exists(audio_path):
+        return {"error": "file_not_found", "message": f"Audio file not found: {audio_path}"}
+
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
+
+    if not api_key:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    if not api_key:
+        return {
+            "error": "missing_api_key",
+            "message": "No Gemini API key configured. Run `/setkey AIzaSy...` to enable voice note recognition."
+        }
+
+    api_key = api_key.strip()
+    ext = os.path.splitext(audio_path)[1].lower()
+    if ext == ".ogg" or ext == ".oga":
+        mime_type = "audio/ogg"
+    elif ext == ".mp3":
+        mime_type = "audio/mp3"
+    elif ext in [".m4a", ".mp4"]:
+        mime_type = "audio/mp4"
+    elif ext == ".wav":
+        mime_type = "audio/wav"
+
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
+
+    prompt = _build_cart_prompt(
+        current_cart=current_cart,
+        user_context_text="Listen carefully to the attached voice note from the user about their Wolt shopping cart."
+    )
+
+    discovered = list_supported_gemini_models(api_key)
+    models_to_try = [m for m in discovered] if discovered else [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+    ]
+    models_to_try = models_to_try[:4]
+    attempted_errors = []
+    last_error = ""
+
+    # Strategy 1: Official Google GenAI SDK (v1)
+    for model_name in models_to_try:
+        try:
+            from google import genai
+            from google.genai import types
+            client = genai.Client(api_key=api_key)
+            audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=[prompt, audio_part],
+                config={"response_mime_type": "application/json"}
+            )
+            if resp and resp.text:
+                clean = resp.text.strip()
+                clean = re.sub(r'^```(?:json)?\s*', '', clean)
+                clean = re.sub(r'\s*```$', '', clean)
+                data = json.loads(clean)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            attempted_errors.append(f"SDK:{model_name}->{e}")
+            last_error = str(e)
+
+    # Strategy 2: Legacy google.generativeai SDK
+    for model_name in models_to_try:
+        try:
+            import google.generativeai as legacy_genai
+            legacy_genai.configure(api_key=api_key)
+            model = legacy_genai.GenerativeModel(model_name, generation_config={"response_mime_type": "application/json"})
+            audio_part = {"mime_type": mime_type, "data": audio_bytes}
+            resp = model.generate_content([prompt, audio_part])
+            if resp and resp.text:
+                clean = resp.text.strip()
+                clean = re.sub(r'^```(?:json)?\s*', '', clean)
+                clean = re.sub(r'\s*```$', '', clean)
+                data = json.loads(clean)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            attempted_errors.append(f"Legacy:{model_name}->{e}")
+            last_error = str(e)
+
+    # Strategy 3: Direct HTTP REST API
+    import base64
+    import urllib.error
+    try:
+        b64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+        candidate_configs = []
+        for m_name in models_to_try:
+            candidate_configs.append(("v1beta", m_name))
+            candidate_configs.append(("v1", m_name))
+
+        for api_ver, m_name in candidate_configs:
+            m_code = m_name.replace("models/", "")
+            try:
+                url = f"https://generativelanguage.googleapis.com/{api_ver}/models/{m_code}:generateContent?key={api_key}"
+                payload = {
+                    "contents": [{
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inline_data": {
+                                    "mime_type": mime_type,
+                                    "data": b64_audio
+                                }
+                            }
+                        ]
+                    }],
+                    "generationConfig": {
+                        "responseMimeType": "application/json"
+                    }
+                }
+                req_data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=35) as response:
+                    res_body = json.loads(response.read().decode("utf-8"))
+                    candidates = res_body.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts and "text" in parts[0]:
+                            raw_txt = parts[0]["text"].strip()
+                            clean = re.sub(r'^```(?:json)?\s*', '', raw_txt)
+                            clean = re.sub(r'\s*```$', '', clean)
+                            data = json.loads(clean)
+                            if isinstance(data, dict):
+                                return data
+            except Exception as e_rest:
+                attempted_errors.append(f"{m_code}->{e_rest}")
+                last_error = str(e_rest)
+    except Exception as e_prep:
+        last_error = str(e_prep)
+
+    err_summary = " | ".join(attempted_errors[-3:]) if attempted_errors else last_error
+    return {
+        "error": "audio_api_error",
+        "message": f"Could not process voice note: {err_summary}"
+    }
+
+def parse_text_cart_with_ai(user_text: str, current_cart: list = None, api_key: str = None, user_id=None) -> dict:
+    """Parses a text message about building or modifying the Wolt shopping cart into normalized Estonian Wolt search items."""
+    if not api_key and user_id:
+        cfg = get_user_config(user_id)
+        api_key = cfg.get("gemini_api_key", "")
+    if not api_key:
+        api_key = os.environ.get("GEMINI_API_KEY", "")
+
+    if api_key:
+        prompt = _build_cart_prompt(
+            current_cart=current_cart,
+            user_context_text=f'User message: "{user_text}"'
+        )
+        try:
+            raw = call_gemini_api(prompt, api_key=api_key, json_mode=True)
+            if raw:
+                clean = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+                clean = re.sub(r'\s*```$', '', clean)
+                data = json.loads(clean)
+                if isinstance(data, dict) and ("updated_cart" in data or "items_added" in data):
+                    return data
+        except Exception:
+            pass
+
+    # Deterministic fallback if no Gemini key or API error
+    _FALLBACK_MAP = {
+        "banana": "Banaan", "bananas": "Banaan", "banano": "Banaan", "bananos": "Banaan", "platano": "Banaan",
+        "egg": "Eggo suured munad L 10tk", "eggs": "Eggo suured munad L 10tk", "huevo": "Eggo suured munad L 10tk", "huevos": "Eggo suured munad L 10tk",
+        "bacon": "Rakvere toorsuitsupeekon", "tocineta": "Rakvere toorsuitsupeekon", "tocino": "Rakvere toorsuitsupeekon",
+        "coffee": "Dolce Gusto Café Au Lait kohvikapslid", "cafe": "Dolce Gusto Café Au Lait kohvikapslid", "café": "Dolce Gusto Café Au Lait kohvikapslid", "capsulas": "Dolce Gusto Café Au Lait kohvikapslid",
+        "onion": "Mugulsibul", "onions": "Mugulsibul", "cebolla": "Mugulsibul", "cebollas": "Mugulsibul",
+        "milk": "Tere piim", "leche": "Tere piim",
+        "chicken": "Tallegg Broilerifilee", "pollo": "Tallegg Broilerifilee", "pechuga": "Tallegg Broilerifilee",
+        "avocado": "Avokaado", "avocados": "Avokaado", "aguacate": "Avokaado", "aguacates": "Avokaado",
+        "tomato": "Kirsstomat", "tomatoes": "Kirsstomat", "tomate": "Kirsstomat", "tomates": "Kirsstomat",
+        "bread": "Röstsai", "pan": "Röstsai",
+        "cheese": "Riivjuust", "queso": "Riivjuust",
+        "butter": "Taluvõi", "mantequilla": "Taluvõi",
+    }
+    added = []
+    parts = re.split(r'[,;\n]+|\band\b|\by\b', user_text)
+    for part in parts:
+        p_clean = part.strip()
+        if not p_clean:
+            continue
+        for prefix in ["add", "buy", "agrega", "agregar", "pon", "poner", "quiero", "necesito", "al carrito", "to cart"]:
+            p_clean = re.sub(rf'\b{prefix}\b', '', p_clean, flags=re.IGNORECASE).strip()
+        if not p_clean:
+            continue
+        q_m = re.search(r'\b(\d+)\b', p_clean)
+        qty = int(q_m.group(1)) if q_m else 1
+        item_raw = re.sub(r'\b\d+\s*x?\b', '', p_clean, flags=re.IGNORECASE).strip(' :.-')
+        if not item_raw:
+            continue
+        mapped = _FALLBACK_MAP.get(item_raw.lower(), item_raw.capitalize())
+        added.append({"name": mapped, "label": item_raw, "qty": qty})
+
+    merged = {}
+    if current_cart:
+        for it in current_cart:
+            if isinstance(it, (tuple, list)) and len(it) >= 2:
+                merged[it[0]] = {"name": it[0], "label": it[0], "qty": it[1]}
+            elif isinstance(it, dict):
+                merged[it["name"]] = dict(it)
+    for it in added:
+        if it["name"] in merged:
+            merged[it["name"]]["qty"] += it["qty"]
+        else:
+            merged[it["name"]] = it
+
+    return {
+        "transcript": user_text,
+        "action": "add",
+        "execute_now": False,
+        "items_added": added,
+        "items_removed": [],
+        "updated_cart": list(merged.values()),
+        "summary_note": "Productos agregados a tu lista de compras de Wolt."
+    }
 
 def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None, user_suggestions: str = None) -> dict:
     """Generates a fully dynamic 7-day culinary meal plan using Gemini based on in-stock ingredients, preferences, and user suggestions."""
