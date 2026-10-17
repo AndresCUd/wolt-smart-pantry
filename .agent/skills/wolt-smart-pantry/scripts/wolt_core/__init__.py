@@ -44,6 +44,8 @@ from .gemini import (
     parse_pdf_receipt,
     parse_voice_cart_with_ai,
     parse_text_cart_with_ai,
+    translate_estonian_title,
+    describe_cart_item,
     generate_ai_weekly_meal_plan,
     generate_ai_meal_swap,
 )
@@ -119,6 +121,8 @@ __all__ = [
     "parse_pdf_receipt",
     "parse_voice_cart_with_ai",
     "parse_text_cart_with_ai",
+    "translate_estonian_title",
+    "describe_cart_item",
     "generate_ai_weekly_meal_plan",
     "generate_ai_meal_swap",
     # Pantry

@@ -853,44 +853,250 @@ def parse_pdf_receipt(pdf_path: str, api_key: str = None, user_id=None) -> list[
     return []
 
 
+# Catalog of Estonian Wolt Market items -> (English Cut/Name, Package Weight in Grams or None, Unit Description)
+_ESTONIAN_PRODUCT_CATALOG = [
+    ("seakaelakarbonaad", "Neck Pork", 400, "pack"),
+    ("sea kaelakarbonaad", "Neck Pork", 400, "pack"),
+    ("kaelakarbonaad", "Neck Pork", 400, "pack"),
+    ("sea sisefilee", "Pork Tenderloin", 400, "pack"),
+    ("sea välisfilee", "Pork Loin", 400, "pack"),
+    ("seahakkliha", "Minced Pork", 300, "pack"),
+    ("sealiha", "Neck Pork", 400, "pack"),
+    ("kodune hakkliha", "Mixed Minced Pork & Beef", 400, "pack"),
+    ("veisehakkliha", "Ground Beef", 300, "pack"),
+    ("veise välisfilee", "Beef Sirloin Steak", 300, "pack"),
+    ("veise sisefilee", "Beef Tenderloin", 300, "pack"),
+    ("veiseliha", "Beef Steak", 300, "pack"),
+    ("broilerifilee", "Chicken Breast Fillet", 500, "pack"),
+    ("kanafilee", "Chicken Breast Fillet", 500, "pack"),
+    ("broileri kintsuliha", "Boneless Chicken Thighs", 400, "pack"),
+    ("kintsuliha", "Boneless Chicken Thighs", 400, "pack"),
+    ("broileri poolkoivad", "Chicken Drumsticks", 500, "pack"),
+    ("poolkoivad", "Chicken Drumsticks", 500, "pack"),
+    ("broilerihakkliha", "Minced Chicken", 300, "pack"),
+    ("toorsuitsupeekon", "Smoked Bacon", 150, "pack"),
+    ("suitsardell", "Smoked Pork Sausages", 300, "pack"),
+    ("peekon", "Smoked Bacon", 150, "pack"),
+    ("lõhefilee", "Salmon Fillet", 400, "pack"),
+    ("forellifilee", "Trout Fillet", 400, "pack"),
+    ("suured munad l 10tk", "Large Eggs L (10 pcs)", None, "box"),
+    ("muna l 10tk", "Large Eggs L (10 pcs)", None, "box"),
+    ("munad", "Large Eggs (10 pcs)", None, "box"),
+    ("kohvikapslid", "Dolce Gusto Coffee Capsules (16 pcs)", None, "box"),
+    ("mugulsibul", "Yellow Onion", 500, "net bag"),
+    ("kollane sibul", "Yellow Onion", 500, "net bag"),
+    ("punane sibul", "Red Onion", 500, "bag"),
+    ("roheline sibul", "Green Onion / Scallions", 100, "pack"),
+    ("küüslauk", "Garlic", 100, "pack"),
+    ("banaan", "Bananas", None, "pcs"),
+    ("avokaado 2tk", "Fresh Avocados (2 pcs)", None, "pack"),
+    ("avokaado", "Fresh Avocado", None, "pcs"),
+    ("punane paprika", "Red Bell Pepper", None, "pcs"),
+    ("kirsstomat", "Cherry Tomatoes", 250, "pack"),
+    ("tomat", "Tomatoes", None, "pcs"),
+    ("luunja kurk", "Fresh Estonian Cucumber", None, "pcs"),
+    ("kurk", "Fresh Cucumber", None, "pcs"),
+    ("kartul", "Potatoes", 1000, "bag"),
+    ("spinat", "Fresh Baby Spinach", 100, "pack"),
+    ("rukola", "Fresh Arugula", 100, "pack"),
+    ("laktoosivaba piim", "Lactose-Free Milk (1L)", None, "carton"),
+    ("täispiim", "Whole Milk (1L)", None, "carton"),
+    ("tere piim", "Fresh Milk (1L)", None, "carton"),
+    ("piim", "Fresh Milk (1L)", None, "carton"),
+    ("taluvõi", "Farm Butter", 200, "pack"),
+    ("või", "Butter", 200, "pack"),
+    ("riivitud mozzarella", "Shredded Mozzarella Cheese", 200, "pack"),
+    ("mozzarella", "Mozzarella Cheese", 125, "pack"),
+    ("riivjuust", "Grated Cheese", 200, "pack"),
+    ("viilutatud juust", "Sliced Cheese", 150, "pack"),
+    ("vahukoor", "Whipping Cream", 200, "carton"),
+    ("kohvikoor", "Coffee Cream", 200, "carton"),
+    ("hapukoor", "Sour Cream", 300, "pack"),
+    ("kodujuust", "Cottage Cheese", 300, "pack"),
+    ("kreeka jogurt", "Greek Yogurt", 350, "cup"),
+    ("röstsai", "Sliced Toast Bread", 500, "loaf"),
+    ("pannkoogijahu", "Pancake Mix Flour", 400, "pack"),
+    ("tortilla", "Wheat Tortillas", 320, "pack"),
+    ("basmati riis", "Basmati Rice", 1000, "pack"),
+    ("riis", "Rice", 1000, "pack"),
+    ("oliiviõli", "Extra Virgin Olive Oil", None, "bottle"),
+    ("sidrun", "Fresh Lemon", None, "pcs"),
+    ("laim", "Fresh Lime", None, "pcs"),
+    ("apelsinimahl", "Orange Juice (1L)", None, "carton"),
+    ("vesi", "Mineral Water", None, "bottle"),
+]
+
+_WORD_TRANSLATIONS = {
+    "jahutatud": "Chilled",
+    "külmutatud": "Frozen",
+    "viilutatud": "Sliced",
+    "riivitud": "Grated",
+    "toorsuitsu": "Smoked",
+    "suitsu": "Smoked",
+    "kodune": "Homestyle",
+    "suured": "Large",
+    "värske": "Fresh",
+    "võrgus": "in Net",
+    "kott": "Bag",
+    "pakend": "Pack",
+}
+
+def translate_estonian_title(est_title: str) -> str:
+    """Translates an Estonian Wolt Market product title or search query into clear English with exact weight in grams."""
+    if not est_title:
+        return ""
+    low = est_title.lower().strip()
+
+    # Extract explicit gram or kg weight from the Estonian title if present (e.g. "400g", "500 g", "1 kg")
+    explicit_g = None
+    m_g = re.search(r'\b(\d+)\s*g\b', low)
+    if m_g:
+        explicit_g = int(m_g.group(1))
+    else:
+        m_kg = re.search(r'\b(\d+(?:[.,]\d+)?)\s*kg\b', low)
+        if m_kg:
+            explicit_g = int(float(m_kg.group(1).replace(",", ".")) * 1000)
+
+    for key_et, en_name, default_g, _unit in _ESTONIAN_PRODUCT_CATALOG:
+        if key_et in low:
+            pkg_g = explicit_g or default_g
+            if pkg_g and "g)" not in en_name.lower() and "l)" not in en_name.lower():
+                return f"{pkg_g}g of {en_name}"
+            return en_name
+
+    # Word-by-word fallback cleanup if not in primary catalog
+    out = est_title
+    for et_w, en_w in _WORD_TRANSLATIONS.items():
+        out = re.sub(rf'\b{et_w}\b', en_w, out, flags=re.IGNORECASE)
+    if explicit_g and f"{explicit_g}g of" not in out.lower():
+        clean_base = re.sub(r'\b\d+\s*g\b', '', out, flags=re.IGNORECASE).strip()
+        return f"{explicit_g}g of {clean_base}"
+    return out
+
+def describe_cart_item(est_name: str, qty: int = 1, custom_label: str = None) -> str:
+    """
+    Formats a cart item for Telegram display so the user always sees the translated English cut/name
+    and total weight in grams (when applicable) alongside the Estonian Wolt search query.
+    Example: '400g of Neck Pork (1 pack × 400g) — [Seakaelakarbonaad 400g]'
+    """
+    qty = max(1, int(qty or 1))
+    low = (est_name or "").lower().strip()
+
+    explicit_g = None
+    m_g = re.search(r'\b(\d+)\s*g\b', low)
+    if m_g:
+        explicit_g = int(m_g.group(1))
+    else:
+        m_kg = re.search(r'\b(\d+(?:[.,]\d+)?)\s*kg\b', low)
+        if m_kg:
+            explicit_g = int(float(m_kg.group(1).replace(",", ".")) * 1000)
+
+    matched_en = None
+    pkg_g = explicit_g
+    unit_desc = "pack"
+
+    for key_et, en_name, default_g, u_type in _ESTONIAN_PRODUCT_CATALOG:
+        if key_et in low:
+            matched_en = en_name
+            if pkg_g is None:
+                pkg_g = default_g
+            unit_desc = u_type
+            break
+
+    # If custom_label from AI already has a specific translated description (e.g. "400g of Neck Pork"), prefer or enrich it
+    if not matched_en and custom_label:
+        # Strip any generic "1 meat" or raw Estonian if possible, or use custom_label
+        matched_en = custom_label.strip()
+        if not pkg_g:
+            m_lbl_g = re.search(r'\b(\d+)\s*g\b', matched_en.lower())
+            if m_lbl_g:
+                pkg_g = int(m_lbl_g.group(1))
+                matched_en = re.sub(r'\b\d+\s*g\s*(?:of|de)?\s*', '', matched_en, flags=re.IGNORECASE).strip()
+
+    if not matched_en:
+        matched_en = translate_estonian_title(est_name)
+
+    # Clean redundant "400g of " prefix from matched_en before formatting total weight
+    clean_cut = re.sub(r'^\d+\s*g\s*(?:of|de)\s+', '', matched_en, flags=re.IGNORECASE).strip()
+
+    if pkg_g:
+        total_g = pkg_g * qty
+        if qty == 1:
+            return f"*{total_g}g of {clean_cut}* (1 {unit_desc} × {pkg_g}g) — `{est_name}`"
+        else:
+            return f"*{total_g}g of {clean_cut}* ({qty} {unit_desc}s × {pkg_g}g) — `{est_name}`"
+    else:
+        unit_plural = f"{qty} {unit_desc}s" if (qty > 1 and not unit_desc.endswith("s")) else f"{qty} {unit_desc}"
+        return f"*{clean_cut}* × *{unit_plural}* — `{est_name}`"
+
+
 _CART_MAPPING_RULES = """
-CRITICAL ESTONIAN WOLT MARKET PRODUCT MAPPING RULES:
-Map any spoken or written grocery item (in Spanish, English, or Estonian) to the exact Estonian Wolt Market search query (`name`):
-- Coffee capsules / cápsulas de café / Dolce Gusto -> "Dolce Gusto Café Au Lait kohvikapslid" (or "Dolce Gusto kohvikapslid" if generic capsules). NEVER use ground press coffee ("presskannukohv") if capsules are requested or in user preferences!
-- Onion / cebolla / yellow onion / cebolla blanca o amarilla -> "Mugulsibul" (NEVER "Roheline sibul" / Green onion unless the user explicitly asks for green onion / cebollín / spring onion!).
-- Red onion / cebolla morada o roja -> "Punane sibul"
-- Garlic / ajo -> "Küüslauk"
-- Eggs / huevos -> "Eggo suured munad L 10tk"
-- Bacon / tocineta / tocino -> "Rakvere toorsuitsupeekon"
-- Chicken breast / pechuga de pollo / pollo -> "Tallegg Broilerifilee"
-- Ground beef / carne molida / picada -> "Veisehakkliha"
-- Pork / cerdo -> "Sealiha"
-- Salmon / salmón -> "Lõhefilee"
-- Bananas / bananos / plátanos -> "Banaan"
-- Avocado / aguacate -> "Avokaado"
-- Bell pepper / pimentón / pimiento / paprika -> "Punane paprika"
-- Cherry tomatoes / tomates cherry -> "Kirsstomat"
-- Tomatoes / tomates -> "Tomat"
-- Cucumber / pepino -> "Luunja kurk"
-- Potatoes / papas / patatas -> "Kartul"
-- Spinach / espinaca -> "Spinat"
-- Arugula / rúcula -> "Rukola"
-- Milk / leche -> "Tere piim" (or "Tere laktoosivaba piim" if lactose-free / deslactosada)
-- Butter / mantequilla -> "Taluvõi"
-- Grated cheese / queso rallado -> "Riivjuust"
-- Mozzarella / queso mozzarella -> "Mozzarella"
-- Cheese slices / queso tajado -> "Viilutatud juust"
-- Cream / crema de leche / nata -> "Vahukoor" or "Kohvikoor"
-- Greek yogurt / yogur griego -> "Kreeka jogurt"
-- Bread / pan tajado / pan de molde / toast -> "Röstsai"
-- Tortillas / fajitas -> "Tortilla"
-- Rice / arroz -> "Basmati riis"
-- Pasta / espagueti / macarrones -> "Pasta"
-- Olive oil / aceite de oliva -> "Oliiviõli"
-- Lemon / limón -> "Sidrun"
-- Water / agua -> "Vesi"
-- Orange juice / jugo de naranja -> "Apelsinimahl"
-For any other item, provide the most accurate Estonian supermarket search term (or well-known brand in Estonia) as `name`, and keep the user's friendly language description in `label`.
+CRITICAL ESTONIAN WOLT MARKET PRODUCT MAPPING & PACKAGE GRAMS RULES:
+1. NEVER use vague names like "1 meat", "pork", "chicken", or generic "Sealiha".
+2. ALWAYS map meats, poultry, fish, dairy, and produce to a SPECIFIC cut AND its standard Estonian Wolt Market package weight in grams (`name` and `package_g`):
+   - Pork / Neck pork / "meat" (when referring to pork) / cerdo / bondiola / cuello de cerdo ->
+     `name`: "Seakaelakarbonaad 400g", `package_g`: 400, `label`: "400g of Neck Pork"
+   - Pork tenderloin / solomillo de cerdo / pork fillet ->
+     `name`: "Sea sisefilee 400g", `package_g`: 400, `label`: "400g of Pork Tenderloin"
+   - Pork loin / lomo de cerdo ->
+     `name`: "Sea välisfilee 400g", `package_g`: 400, `label`: "400g of Pork Loin"
+   - Chicken / chicken breast / "one chicken" / pollo / pechuga de pollo ->
+     `name`: "Tallegg Broilerifilee 500g", `package_g`: 500, `label`: "500g of Chicken Breast Fillet"
+   - Chicken thighs / muslos o contramuslos de pollo ->
+     `name`: "Broileri kintsuliha 400g", `package_g`: 400, `label`: "400g of Boneless Chicken Thighs"
+   - Chicken drumsticks / piernas de pollo ->
+     `name`: "Broileri poolkoivad 500g", `package_g`: 500, `label`: "500g of Chicken Drumsticks"
+   - Ground beef / minced beef / carne molida de res ->
+     `name`: "Veisehakkliha 300g", `package_g`: 300, `label`: "300g of Ground Beef"
+   - Mixed minced meat / carne molida mixta ->
+     `name`: "Kodune hakkliha 400g", `package_g`: 400, `label`: "400g of Mixed Minced Pork & Beef"
+   - Beef steak / sirloin / carne de res ->
+     `name`: "Veise välisfilee 300g", `package_g`: 300, `label`: "300g of Beef Sirloin Steak"
+   - Bacon / tocineta / tocino ->
+     `name`: "Rakvere toorsuitsupeekon 150g", `package_g`: 150, `label`: "150g of Smoked Bacon"
+   - Salmon / salmón / fish ->
+     `name`: "Lõhefilee 400g", `package_g`: 400, `label`: "400g of Salmon Fillet"
+   - Coffee capsules / cápsulas de café / Dolce Gusto ->
+     `name`: "Dolce Gusto Café Au Lait kohvikapslid", `package_g`: null, `label`: "Dolce Gusto Café Au Lait Coffee Capsules (16 pcs)"
+   - Onion / cebolla / yellow onion ->
+     `name`: "Mugulsibul", `package_g`: 500, `label`: "500g of Yellow Onion" (NEVER "Roheline sibul" / Green onion unless explicitly requested!)
+   - Red onion / cebolla morada ->
+     `name`: "Punane sibul", `package_g`: 500, `label`: "500g of Red Onion"
+   - Garlic / ajo ->
+     `name`: "Küüslauk", `package_g`: 100, `label`: "100g of Garlic"
+   - Eggs / huevos ->
+     `name`: "Eggo suured munad L 10tk", `package_g`: null, `label`: "Large Eggs L (10 pcs)"
+   - Bananas / bananos / plátanos ->
+     `name`: "Banaan", `package_g`: null, `label`: "Bananas"
+   - Avocado / aguacate ->
+     `name`: "Avokaado", `package_g`: null, `label`: "Fresh Avocado"
+   - Bell pepper / pimentón / paprika ->
+     `name`: "Punane paprika", `package_g`: null, `label`: "Red Bell Pepper"
+   - Cherry tomatoes / tomates cherry ->
+     `name`: "Kirsstomat 250g", `package_g`: 250, `label`: "250g of Cherry Tomatoes"
+   - Cucumber / pepino ->
+     `name`: "Luunja kurk", `package_g`: null, `label`: "Fresh Cucumber"
+   - Potatoes / papas ->
+     `name`: "Kartul", `package_g`: 1000, `label`: "1000g of Potatoes"
+   - Spinach / espinaca ->
+     `name`: "Spinat 100g", `package_g`: 100, `label`: "100g of Baby Spinach"
+   - Arugula / rúcula ->
+     `name`: "Rukola 100g", `package_g`: 100, `label`: "100g of Fresh Arugula"
+   - Milk / leche ->
+     `name`: "Tere piim", `package_g`: null, `label`: "Fresh Milk (1L)" (or "Tere laktoosivaba piim" -> "Lactose-Free Milk (1L)")
+   - Butter / mantequilla ->
+     `name`: "Taluvõi 200g", `package_g`: 200, `label`: "200g of Farm Butter"
+   - Grated cheese / queso rallado ->
+     `name`: "Riivjuust 200g", `package_g`: 200, `label`: "200g of Grated Cheese"
+   - Mozzarella ->
+     `name`: "Mozzarella 125g", `package_g`: 125, `label`: "125g of Mozzarella Cheese"
+   - Bread / pan tajado / toast ->
+     `name`: "Röstsai", `package_g`: 500, `label`: "500g of Sliced Toast Bread"
+
+3. HOW TO HANDLE "ONE" OR SPECIFIC GRAMS FOR MEAT / CHICKEN / PORK / FISH:
+   - When the user says "one" (1) of a meat/chicken/pork/fish (e.g. "one neck pork", "one chicken", "1 carne de cerdo", "una pechuga"), `qty` is `1` (meaning 1 package), and `label` MUST explicitly include the package weight in grams and the exact cut (e.g. "400g of Neck Pork", "500g of Chicken Breast Fillet").
+   - When the user asks for a specific weight in grams or kilos (e.g. "800g of neck pork" or "1kg of chicken breast"), divide the requested weight by `package_g` to set `qty` (e.g. 800g / 400g = `qty: 2`), and set `label` to `"800g of Neck Pork"`!
+   - ALWAYS write `label` in clear English (never leave `label` in Estonian!).
 """
 
 def _build_cart_prompt(current_cart: list = None, user_context_text: str = "") -> str:
@@ -899,9 +1105,9 @@ def _build_cart_prompt(current_cart: list = None, user_context_text: str = "") -
         formatted = []
         for it in current_cart:
             if isinstance(it, (tuple, list)) and len(it) >= 2:
-                formatted.append(f"- {it[0]} (qty: {it[1]})")
+                formatted.append(f"- {it[0]} (qty: {it[1]} packs/units)")
             elif isinstance(it, dict):
-                formatted.append(f"- {it.get('name')} (qty: {it.get('qty', 1)})")
+                formatted.append(f"- {it.get('name')} (qty: {it.get('qty', 1)} packs/units)")
         if formatted:
             staged_str = "\n".join(formatted)
 
@@ -918,12 +1124,13 @@ Your task:
 1. Transcribe what the user said (`transcript`).
 2. Understand how the user wants to modify or build their Wolt shopping cart:
    - "add": User is naming items to buy or adding items to the current staged cart.
-   - "replace": User explicitly asks to clear/start over with a new list (e.g. "borra todo y pon solo...", "new cart from scratch with..."). Note: if Current Staged Shopping Cart is Empty, "add" and "replace" both create the list.
+   - "replace": User explicitly asks to clear/start over with a new list (e.g. "borra todo y pon solo...", "new cart from scratch with...").
    - "remove": User is removing specific items from the current staged cart (e.g. "quita la cebolla", "remove the milk").
    - "clear": User wants to empty the entire staged cart.
    - "execute": User is not adding new items, just saying "build the cart on Wolt now" / "ya puedes comprar" / "haz el pedido".
-3. Set `execute_now` to `true` ONLY IF the user explicitly instructs to launch/execute the order on Wolt immediately in this message (e.g., "agrega leche y arma el carrito de una vez", "ya mándalo a Wolt", "build the cart on Wolt now"). Otherwise set `execute_now` to `false` so the user can review the staged list first.
+3. Set `execute_now` to `true` ONLY IF the user explicitly instructs to launch/execute the order on Wolt immediately in this message. Otherwise set `execute_now` to `false`.
 4. Compute `updated_cart`: the complete resulting list of items in the cart after applying the user's additions, quantity changes, or removals to the Current Staged Shopping Cart.
+   - Every item's `label` MUST be in clear English and, for meats/chicken/pork/fish/cheese/produce with package weights, MUST state the exact cut and grams (e.g. "400g of Neck Pork", "500g of Chicken Breast Fillet").
 
 Respond ONLY with a valid JSON object matching this exact schema:
 {{
@@ -932,20 +1139,22 @@ Respond ONLY with a valid JSON object matching this exact schema:
   "execute_now": true | false,
   "items_added": [
     {{
-      "name": "<Estonian Wolt Market search query>",
-      "label": "<Friendly name in user's language>",
-      "qty": <int>
+      "name": "<Estonian Wolt Market search query with grams if applicable, e.g. Seakaelakarbonaad 400g>",
+      "label": "<Precise English description with grams & cut, e.g. 400g of Neck Pork>",
+      "package_g": <int grams per 1 package or null>,
+      "qty": <int number of packages/units>
     }}
   ],
   "items_removed": ["<name of removed item>"],
   "updated_cart": [
     {{
-      "name": "<Estonian Wolt Market search query>",
-      "label": "<Friendly name in user's language>",
-      "qty": <int>
+      "name": "<Estonian Wolt Market search query with grams if applicable>",
+      "label": "<Precise English description with grams & cut>",
+      "package_g": <int grams per 1 package or null>,
+      "qty": <int number of packages/units>
     }}
   ],
-  "summary_note": "<1 short friendly sentence in the user's language confirming the cart update>"
+  "summary_note": "<1 short friendly sentence confirming the exact items and weights in grams added/updated>"
 }}
 """
 
@@ -1014,7 +1223,7 @@ def parse_voice_cart_with_ai(audio_path: str, current_cart: list = None, api_key
                 clean = re.sub(r'\s*```$', '', clean)
                 data = json.loads(clean)
                 if isinstance(data, dict):
-                    return data
+                    return _normalize_cart_payload(data)
         except Exception as e:
             attempted_errors.append(f"SDK:{model_name}->{e}")
             last_error = str(e)
@@ -1033,7 +1242,7 @@ def parse_voice_cart_with_ai(audio_path: str, current_cart: list = None, api_key
                 clean = re.sub(r'\s*```$', '', clean)
                 data = json.loads(clean)
                 if isinstance(data, dict):
-                    return data
+                    return _normalize_cart_payload(data)
         except Exception as e:
             attempted_errors.append(f"Legacy:{model_name}->{e}")
             last_error = str(e)
@@ -1081,7 +1290,7 @@ def parse_voice_cart_with_ai(audio_path: str, current_cart: list = None, api_key
                             clean = re.sub(r'\s*```$', '', clean)
                             data = json.loads(clean)
                             if isinstance(data, dict):
-                                return data
+                                return _normalize_cart_payload(data)
             except Exception as e_rest:
                 attempted_errors.append(f"{m_code}->{e_rest}")
                 last_error = str(e_rest)
@@ -1093,6 +1302,66 @@ def parse_voice_cart_with_ai(audio_path: str, current_cart: list = None, api_key
         "error": "audio_api_error",
         "message": f"Could not process voice note: {err_summary}"
     }
+
+def _normalize_single_cart_item(it: dict) -> dict:
+    """Guarantees that vague meat/chicken/pork/fish items always resolve to a specific Estonian cut with exact package grams."""
+    if not isinstance(it, dict):
+        return it
+    raw_name = str(it.get("name") or "").strip()
+    raw_lbl = str(it.get("label") or "").strip()
+    qty = max(1, int(it.get("qty", 1) or 1))
+    pkg_g = it.get("package_g")
+
+    combined_low = f"{raw_name} {raw_lbl}".lower()
+
+    # Upgrade vague or weightless meat/poultry/fish references to exact package cuts & weights
+    _UPGRADE_RULES = [
+        (["seakaelakarbonaad", "kaelakarbonaad", "neck pork", "pork neck", "bondiola", "cuello de cerdo"], "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        (["sea sisefilee", "pork tenderloin", "solomillo de cerdo"], "Sea sisefilee 400g", "400g of Pork Tenderloin", 400),
+        (["sea välisfilee", "pork loin", "lomo de cerdo"], "Sea välisfilee 400g", "400g of Pork Loin", 400),
+        (["toorsuitsupeekon", "peekon", "bacon", "tocineta", "tocino"], "Rakvere toorsuitsupeekon 150g", "150g of Smoked Bacon", 150),
+        (["kodune hakkliha", "mixed minced", "carne molida mixta"], "Kodune hakkliha 400g", "400g of Mixed Minced Pork & Beef", 400),
+        (["veisehakkliha", "ground beef", "minced beef", "carne molida", "hakkliha"], "Veisehakkliha 300g", "300g of Ground Beef", 300),
+        (["veise välisfilee", "veise sisefilee", "veiseliha", "beef steak", "sirloin", "carne de res"], "Veise välisfilee 300g", "300g of Beef Sirloin Steak", 300),
+        (["broileri kintsuliha", "kintsuliha", "chicken thigh", "muslos de pollo", "contramuslo"], "Broileri kintsuliha 400g", "400g of Boneless Chicken Thighs", 400),
+        (["broileri poolkoivad", "poolkoivad", "drumstick", "piernas de pollo"], "Broileri poolkoivad 500g", "500g of Chicken Drumsticks", 500),
+        (["broilerifilee", "kanafilee", "chicken", "kana", "broiler", "pollo", "pechuga"], "Tallegg Broilerifilee 500g", "500g of Chicken Breast Fillet", 500),
+        (["lõhefilee", "lõhe", "salmon", "salmón"], "Lõhefilee 400g", "400g of Salmon Fillet", 400),
+        (["sealiha", "pork", "cerdo", "meat", "1 meat", "carne de cerdo"], "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+    ]
+
+    for keywords, target_est, target_lbl, target_g in _UPGRADE_RULES:
+        if any(kw in combined_low for kw in keywords):
+            # If raw_name doesn't already have explicit grams, or is vague like "meat" / "pork" / "Sealiha"
+            has_explicit_g = bool(re.search(r'\b\d+\s*g\b', raw_name.lower()))
+            is_vague = raw_name.lower() in ["meat", "1 meat", "pork", "pork meat", "sealiha", "chicken", "kana", "beef", "veiseliha", "carne", "cerdo", "pollo"]
+            if not has_explicit_g or is_vague:
+                raw_name = target_est
+            if not pkg_g:
+                pkg_g = target_g
+            if not raw_lbl or raw_lbl.lower() in ["meat", "1 meat", "pork", "pork meat", "chicken", "beef", "carne", "cerdo", "pollo"] or "g" not in raw_lbl.lower():
+                raw_lbl = target_lbl
+            break
+
+    if not raw_lbl:
+        raw_lbl = translate_estonian_title(raw_name)
+
+    return {
+        "name": raw_name,
+        "label": raw_lbl,
+        "package_g": pkg_g,
+        "qty": qty
+    }
+
+def _normalize_cart_payload(data: dict) -> dict:
+    """Normalizes all items in a parsed voice/text cart response to ensure English labels and exact package weights in grams."""
+    if not isinstance(data, dict):
+        return data
+    if isinstance(data.get("items_added"), list):
+        data["items_added"] = [_normalize_single_cart_item(it) for it in data["items_added"] if isinstance(it, dict)]
+    if isinstance(data.get("updated_cart"), list):
+        data["updated_cart"] = [_normalize_single_cart_item(it) for it in data["updated_cart"] if isinstance(it, dict)]
+    return data
 
 def parse_text_cart_with_ai(user_text: str, current_cart: list = None, api_key: str = None, user_id=None) -> dict:
     """Parses a text message about building or modifying the Wolt shopping cart into normalized Estonian Wolt search items."""
@@ -1114,65 +1383,117 @@ def parse_text_cart_with_ai(user_text: str, current_cart: list = None, api_key: 
                 clean = re.sub(r'\s*```$', '', clean)
                 data = json.loads(clean)
                 if isinstance(data, dict) and ("updated_cart" in data or "items_added" in data):
-                    return data
+                    return _normalize_cart_payload(data)
         except Exception:
             pass
 
     # Deterministic fallback if no Gemini key or API error
-    _FALLBACK_MAP = {
-        "banana": "Banaan", "bananas": "Banaan", "banano": "Banaan", "bananos": "Banaan", "platano": "Banaan",
-        "egg": "Eggo suured munad L 10tk", "eggs": "Eggo suured munad L 10tk", "huevo": "Eggo suured munad L 10tk", "huevos": "Eggo suured munad L 10tk",
-        "bacon": "Rakvere toorsuitsupeekon", "tocineta": "Rakvere toorsuitsupeekon", "tocino": "Rakvere toorsuitsupeekon",
-        "coffee": "Dolce Gusto Café Au Lait kohvikapslid", "cafe": "Dolce Gusto Café Au Lait kohvikapslid", "café": "Dolce Gusto Café Au Lait kohvikapslid", "capsulas": "Dolce Gusto Café Au Lait kohvikapslid",
-        "onion": "Mugulsibul", "onions": "Mugulsibul", "cebolla": "Mugulsibul", "cebollas": "Mugulsibul",
-        "milk": "Tere piim", "leche": "Tere piim",
-        "chicken": "Tallegg Broilerifilee", "pollo": "Tallegg Broilerifilee", "pechuga": "Tallegg Broilerifilee",
-        "avocado": "Avokaado", "avocados": "Avokaado", "aguacate": "Avokaado", "aguacates": "Avokaado",
-        "tomato": "Kirsstomat", "tomatoes": "Kirsstomat", "tomate": "Kirsstomat", "tomates": "Kirsstomat",
-        "bread": "Röstsai", "pan": "Röstsai",
-        "cheese": "Riivjuust", "queso": "Riivjuust",
-        "butter": "Taluvõi", "mantequilla": "Taluvõi",
-    }
+    _FALLBACK_MAP = [
+        ("neck pork", "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        ("pork tenderloin", "Sea sisefilee 400g", "400g of Pork Tenderloin", 400),
+        ("pork loin", "Sea välisfilee 400g", "400g of Pork Loin", 400),
+        ("pork meat", "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        ("carne de cerdo", "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        ("pork", "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        ("cerdo", "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        ("meat", "Seakaelakarbonaad 400g", "400g of Neck Pork", 400),
+        ("ground beef", "Veisehakkliha 300g", "300g of Ground Beef", 300),
+        ("carne molida", "Veisehakkliha 300g", "300g of Ground Beef", 300),
+        ("carne", "Veisehakkliha 300g", "300g of Ground Beef", 300),
+        ("chicken thigh", "Broileri kintsuliha 400g", "400g of Boneless Chicken Thighs", 400),
+        ("chicken breast", "Tallegg Broilerifilee 500g", "500g of Chicken Breast Fillet", 500),
+        ("chicken", "Tallegg Broilerifilee 500g", "500g of Chicken Breast Fillet", 500),
+        ("pollo", "Tallegg Broilerifilee 500g", "500g of Chicken Breast Fillet", 500),
+        ("pechuga", "Tallegg Broilerifilee 500g", "500g of Chicken Breast Fillet", 500),
+        ("bacon", "Rakvere toorsuitsupeekon 150g", "150g of Smoked Bacon", 150),
+        ("tocineta", "Rakvere toorsuitsupeekon 150g", "150g of Smoked Bacon", 150),
+        ("tocino", "Rakvere toorsuitsupeekon 150g", "150g of Smoked Bacon", 150),
+        ("salmon", "Lõhefilee 400g", "400g of Salmon Fillet", 400),
+        ("salmón", "Lõhefilee 400g", "400g of Salmon Fillet", 400),
+        ("banana", "Banaan", "Bananas", None),
+        ("banano", "Banaan", "Bananas", None),
+        ("platano", "Banaan", "Bananas", None),
+        ("egg", "Eggo suured munad L 10tk", "Large Eggs L (10 pcs)", None),
+        ("huevo", "Eggo suured munad L 10tk", "Large Eggs L (10 pcs)", None),
+        ("coffee", "Dolce Gusto Café Au Lait kohvikapslid", "Dolce Gusto Café Au Lait Coffee Capsules", None),
+        ("cafe", "Dolce Gusto Café Au Lait kohvikapslid", "Dolce Gusto Café Au Lait Coffee Capsules", None),
+        ("café", "Dolce Gusto Café Au Lait kohvikapslid", "Dolce Gusto Café Au Lait Coffee Capsules", None),
+        ("capsula", "Dolce Gusto Café Au Lait kohvikapslid", "Dolce Gusto Café Au Lait Coffee Capsules", None),
+        ("green onion", "Roheline sibul 100g", "100g of Green Onion", 100),
+        ("onion", "Mugulsibul", "500g of Yellow Onion", 500),
+        ("cebolla", "Mugulsibul", "500g of Yellow Onion", 500),
+        ("milk", "Tere piim", "Fresh Milk (1L)", None),
+        ("leche", "Tere piim", "Fresh Milk (1L)", None),
+        ("avocado", "Avokaado", "Fresh Avocado", None),
+        ("aguacate", "Avokaado", "Fresh Avocado", None),
+        ("tomato", "Kirsstomat 250g", "250g of Cherry Tomatoes", 250),
+        ("tomate", "Kirsstomat 250g", "250g of Cherry Tomatoes", 250),
+        ("bread", "Röstsai", "500g of Sliced Toast Bread", 500),
+        ("pan", "Röstsai", "500g of Sliced Toast Bread", 500),
+        ("cheese", "Riivjuust 200g", "200g of Grated Cheese", 200),
+        ("queso", "Riivjuust 200g", "200g of Grated Cheese", 200),
+        ("butter", "Taluvõi 200g", "200g of Farm Butter", 200),
+        ("mantequilla", "Taluvõi 200g", "200g of Farm Butter", 200),
+    ]
     added = []
     parts = re.split(r'[,;\n]+|\band\b|\by\b', user_text)
     for part in parts:
         p_clean = part.strip()
         if not p_clean:
             continue
-        for prefix in ["add", "buy", "agrega", "agregar", "pon", "poner", "quiero", "necesito", "al carrito", "to cart"]:
+        for prefix in ["add", "buy", "agrega", "agregar", "pon", "poner", "quiero", "necesito", "al carrito", "to cart", "one", "un", "una"]:
             p_clean = re.sub(rf'\b{prefix}\b', '', p_clean, flags=re.IGNORECASE).strip()
         if not p_clean:
             continue
+        # Check if user specified grams like "800g of neck pork"
+        g_m = re.search(r'\b(\d+)\s*g\b', p_clean, flags=re.IGNORECASE)
+        req_grams = int(g_m.group(1)) if g_m else None
+        if g_m:
+            p_clean = re.sub(r'\b\d+\s*g\s*(?:of|de)?\b', '', p_clean, flags=re.IGNORECASE).strip()
+
         q_m = re.search(r'\b(\d+)\b', p_clean)
         qty = int(q_m.group(1)) if q_m else 1
         item_raw = re.sub(r'\b\d+\s*x?\b', '', p_clean, flags=re.IGNORECASE).strip(' :.-')
         if not item_raw:
             continue
-        mapped = _FALLBACK_MAP.get(item_raw.lower(), item_raw.capitalize())
-        added.append({"name": mapped, "label": item_raw, "qty": qty})
+        low_raw = item_raw.lower()
+        mapped_tuple = None
+        for kw, est_n, en_l, p_g in _FALLBACK_MAP:
+            if kw in low_raw:
+                mapped_tuple = (est_n, en_l, p_g)
+                break
+        if mapped_tuple:
+            mapped_name, en_label, pkg_g = mapped_tuple
+            if req_grams and pkg_g:
+                qty = max(1, int(round(req_grams / pkg_g)))
+        else:
+            mapped_name, en_label, pkg_g = item_raw.capitalize(), translate_estonian_title(item_raw), None
+        added.append(_normalize_single_cart_item({"name": mapped_name, "label": en_label, "package_g": pkg_g, "qty": qty}))
 
     merged = {}
     if current_cart:
         for it in current_cart:
             if isinstance(it, (tuple, list)) and len(it) >= 2:
-                merged[it[0]] = {"name": it[0], "label": it[0], "qty": it[1]}
+                norm_existing = _normalize_single_cart_item({"name": it[0], "label": translate_estonian_title(it[0]), "qty": it[1]})
+                merged[norm_existing["name"]] = norm_existing
             elif isinstance(it, dict):
-                merged[it["name"]] = dict(it)
+                norm_existing = _normalize_single_cart_item(dict(it))
+                merged[norm_existing["name"]] = norm_existing
     for it in added:
         if it["name"] in merged:
             merged[it["name"]]["qty"] += it["qty"]
         else:
             merged[it["name"]] = it
 
-    return {
+    return _normalize_cart_payload({
         "transcript": user_text,
         "action": "add",
         "execute_now": False,
         "items_added": added,
         "items_removed": [],
         "updated_cart": list(merged.values()),
-        "summary_note": "Productos agregados a tu lista de compras de Wolt."
-    }
+        "summary_note": "Items added to your Wolt shopping cart with exact package weights."
+    })
 
 def generate_ai_weekly_meal_plan(inventory_items=None, prefs=None, api_key=None, user_id=None, user_suggestions: str = None) -> dict:
     """Generates a fully dynamic 7-day culinary meal plan using Gemini based on in-stock ingredients, preferences, and user suggestions."""

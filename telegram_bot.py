@@ -75,6 +75,8 @@ from wolt_manager import (
     parse_pdf_receipt,
     parse_voice_cart_with_ai,
     parse_text_cart_with_ai,
+    translate_estonian_title,
+    describe_cart_item,
     SAMPLE_WEEKLY_GROCERY_LIST
 )
 
@@ -258,11 +260,11 @@ def create_cart_progress_updater(target_msg, store_slug: str):
             filled = int((idx / total) * 10) if total else 0
             bar = "▓" * filled + "░" * (10 - filled)
 
-            qty_str = f" (x{qty})" if qty > 1 else ""
+            item_desc = describe_cart_item(item_name, qty)
             if step == "searching":
-                action_text = f"🔍 *Buscando:* `{item_name}`{qty_str}..."
+                action_text = f"🔍 *Buscando:* {item_desc}..."
             else:
-                action_text = f"✅ *Procesado:* `{item_name}`{qty_str}"
+                action_text = f"✅ *Procesado:* {item_desc}"
 
             recent_text = ""
             if added:
@@ -273,14 +275,14 @@ def create_cart_progress_updater(target_msg, store_slug: str):
                     q = it.get("qty", 1)
                     p = it.get("price", "")
                     p_str = f" ({p})" if p else ""
-                    lines.append(f"  • {t} x{q}{p_str}")
+                    lines.append(f"  • {describe_cart_item(t, q)}{p_str}")
                 recent_text = "\n\n*Últimos agregados:*\n" + "\n".join(lines)
 
-            price_txt = f"\n💶 *Subtotal actual:* **{price:.2f} €**" if price > 0 else ""
+            price_txt = f"\n💶 *Subtotal actual:* *{price:.2f} €*" if price > 0 else ""
 
             text = (
                 f"🛒 *Armando Carrito en Wolt ({store_slug})...*\n\n"
-                f"Progreso: `[{bar}]` **{idx}/{total}** ({pct}%)\n"
+                f"Progreso: `[{bar}]` *{idx}/{total}* ({pct}%)\n"
                 f"{action_text}"
                 f"{recent_text}"
                 f"{price_txt}\n\n"
@@ -306,7 +308,7 @@ def create_cart_progress_updater(target_msg, store_slug: str):
     return callback
 
 def format_cart_result_message(res: dict, store: str, city: str, country: str, user_id: int):
-    """Formats the cart assembly result, including added items, budget alerts, and pending substitutes."""
+    """Formats the cart assembly result, including translated English product names, exact grams, budget alerts, and pending substitutes."""
     final_p = res.get("final_price", 0.0)
     items_subtotal = res.get("items_subtotal", 0.0)
     cleared = res.get("cart_cleared", False)
@@ -317,15 +319,18 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
     added = res.get("added_items", [])
     failed = res.get("failed_items", [])
     wolt_url = f"https://wolt.com/en/{country}/{city}/venue/{store}"
+    labels_map = user_pending_labels.get(user_id, {})
 
-    # Build breakdown of added products
+    # Build breakdown of added products with English translation + exact grams
     items_lines = []
     for a in added:
         t = a.get("title", a.get("name", "Producto"))
         q = a.get("qty", 1)
         pr = a.get("price", "")
         pr_txt = f" (`{pr}`)" if pr else ""
-        items_lines.append(f"  • {t} x{q}{pr_txt}")
+        req_name = a.get("name", "")
+        custom_lbl = labels_map.get(req_name, "")
+        items_lines.append(f"  • {describe_cart_item(t, q, custom_lbl)}{pr_txt}")
 
     items_txt = ""
     if items_lines:
@@ -333,17 +338,21 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
 
     failed_txt = ""
     if failed:
-        f_lines = [f"  • `{f.get('query', 'Item')}` (x{f.get('qty', 1)})" for f in failed]
+        f_lines = []
+        for f in failed:
+            fq = f.get("query", "Item")
+            fqty = f.get("qty", 1)
+            f_lines.append(f"  • {describe_cart_item(fq, fqty, labels_map.get(fq, ''))}")
         failed_txt = "⚠️ *No encontrados en tienda:*\n" + "\n".join(f_lines) + "\n\n"
 
     cleared_txt = " _(carrito anterior vaciado)_" if cleared else ""
 
     # Clear, unambiguous pricing summary
     if items_subtotal > 0 and final_p > 0 and abs(final_p - items_subtotal) > 0.10:
-        price_header = f"💶 *Subtotal de productos:* **{items_subtotal:.2f} €**\n🧾 *Total sincronizado en Wolt:* **{final_p:.2f} €**{cleared_txt}\n\n"
+        price_header = f"💶 *Subtotal de productos:* *{items_subtotal:.2f} €*\n🧾 *Total sincronizado en Wolt:* *{final_p:.2f} €*{cleared_txt}\n\n"
     else:
         disp_p = final_p if final_p > 0 else items_subtotal
-        price_header = f"💶 *Total Carrito Wolt:* **{disp_p:.2f} €**{cleared_txt}\n\n"
+        price_header = f"💶 *Total Carrito Wolt:* *{disp_p:.2f} €*{cleared_txt}\n\n"
 
     # 1. Substitutions detected -> Ask user to accept or reject
     if pending_subs:
@@ -352,10 +361,13 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
         for s in pending_subs:
             req = s.get("requested", "Item")
             fnd = s.get("found_title", "Substitute")
+            s_qty = s.get("qty", 1)
             pr = s.get("price", "")
             rsn = s.get("reason", "Diferencia de producto")
             pr_txt = f" ({pr})" if pr else ""
-            sub_lines.append(f"• *Solicitado:* `{req}`\n  ➔ *Encontrado:* `{fnd}`{pr_txt}\n  _{rsn}_")
+            req_desc = describe_cart_item(req, s_qty, labels_map.get(req, ""))
+            fnd_desc = describe_cart_item(fnd, s_qty)
+            sub_lines.append(f"• *Solicitado:* {req_desc}\n  ➔ *Encontrado:* {fnd_desc}{pr_txt}\n  _{rsn}_")
             
         added_txt = f"\n\n✅ *Productos exactos agregados:* {len(added)}" if added else ""
         
@@ -383,11 +395,11 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
         response_text = (
             "🚨 *Budget Safety Alert!*\n\n"
             f"{price_header}"
-            f"🚫 *Set Budget Limit:* **{budget_limit:.2f} €**\n\n"
+            f"🚫 *Set Budget Limit:* *{budget_limit:.2f} €*\n\n"
             f"{items_txt}"
             f"{failed_txt}"
-            "⚠️ Auto-Pay was **automatically blocked** because the total exceeds your budget!\n"
-            "📲 All items are ready in your cart. You can open your **Wolt mobile app** or browser to review before paying."
+            "⚠️ Auto-Pay was *automatically blocked* because the total exceeds your budget!\n"
+            "📲 All items are ready in your cart. You can open your *Wolt mobile app* or browser to review before paying."
         )
         keyboard = [
             [InlineKeyboardButton("📱 Open Wolt App", url=wolt_url)],
@@ -415,7 +427,7 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
         f"{price_header}"
         f"{items_txt}"
         f"{failed_txt}"
-        "📲 *Wolt has synced your cart to your phone!* Open your **Wolt mobile app** to review items and pay with 1 tap.\n\n"
+        "📲 *Wolt has synced your cart to your phone!* Open your *Wolt mobile app* to review items and pay with 1 tap.\n\n"
         "👇 Once placed, tap below to sync your virtual pantry memory:"
     )
     keyboard = [
@@ -449,7 +461,7 @@ def format_staged_cart_message(user_id: int, transcript: str = None, summary_not
         text = (
             f"{header}"
             "🛒 *Tu Lista de Compras para Wolt está vacía.*\n\n"
-            "🎙️ *Envía una Nota de Voz* o escribe un mensaje diciendo qué productos quieres agregar al carrito (por ejemplo: _'agrega 6 bananos, huevos grandes, leche y cápsulas de café Dolce Gusto'_)."
+            "🎙️ *Envía una Nota de Voz* o escribe un mensaje diciendo qué productos quieres agregar al carrito (por ejemplo: _'agrega 6 bananos, 1 carne de cerdo (400g), huevos grandes, leche y cápsulas de café Dolce Gusto'_)."
         )
         keyboard = [
             [InlineKeyboardButton("🎙️/✏️ Agregar Productos al Carrito", callback_data="btn_prompt_cart")],
@@ -460,8 +472,7 @@ def format_staged_cart_message(user_id: int, transcript: str = None, summary_not
     lines = []
     for name, qty in items:
         lbl = labels_map.get(name, "")
-        lbl_str = f" _({lbl})_" if lbl and lbl.lower() != name.lower() else ""
-        lines.append(f"• `{name}` × **{qty}**{lbl_str}")
+        lines.append(f"• {describe_cart_item(name, qty, lbl)}")
 
     items_block = "\n".join(lines)
     flow_txt = "⚡ 1-Click Auto-Pay" if auto_pay_active else "🛡️ Safe Review (Sync a tu App)"
@@ -1094,21 +1105,21 @@ async def pantry_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "📦 *Long-Term Staples (No Repurchase Needed):*\n"
     if staples:
         for s in staples:
-            text += f"• `{s['name']}` (Qty: {s.get('qty', 1)}, ~{s.get('estimated_weeks', 4)} wks left)\n"
+            text += f"• {describe_cart_item(s['name'], s.get('qty', 1))} (~{s.get('estimated_weeks', 4)} wks left)\n"
     else:
         text += "• _No staples recorded yet._\n"
 
     text += "\n🥩 *Tracked Proteins:*\n"
     if proteins:
         for p in proteins:
-            text += f"• `{p['name']}` (Qty: {p.get('qty', 1)})\n"
+            text += f"• {describe_cart_item(p['name'], p.get('qty', 1))}\n"
     else:
         text += "• _None currently in stock._\n"
 
     if produce:
         text += "\n🥑 *Tracked Produce:*\n"
         for pr in produce:
-            text += f"• `{pr['name']}` (Qty: {pr.get('qty', 1)})\n"
+            text += f"• {describe_cart_item(pr['name'], pr.get('qty', 1))}\n"
 
     text += f"\n📜 *Order History:* {len(history)} past orders recorded.\n"
     text += f"🕒 *Last Sync:* `{data.get('last_updated', 'N/A')}`"
@@ -1141,7 +1152,9 @@ async def deals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = f"🔥 *Top Active Deals in {store}:*\n\n"
             for d in deals[:10]:
                 orig = f" ~{d['original_price']}~" if d.get('original_price') else ""
-                text += f"• *{d['title']}*: `{d['price']}`{orig}\n"
+                en_deal = translate_estonian_title(d['title'])
+                deal_lbl = f"*{en_deal}* (`{d['title']}`)" if en_deal.lower() != d['title'].lower() else f"*{d['title']}*"
+                text += f"• {deal_lbl}: `{d['price']}`{orig}\n"
             text += "\n_Use `/plan` to automatically incorporate deals into your meal plan._"
         else:
             text = f"ℹ️ No promotional deal badges detected on {store} right now."
@@ -1202,7 +1215,7 @@ async def plan_command(update: Update, context: ContextTypes.DEFAULT_TYPE, sugge
         "🛒 *Itemized Grocery List:*\n"
     )
     for it_name, it_qty in filtered_items:
-        plan_text += f"• `{it_name}` × {it_qty}\n"
+        plan_text += f"• {describe_cart_item(it_name, it_qty)}\n"
 
     plan_text += f"\n⚙️ *Configured Flow:* `{'⚡ 1-Click Auto-Pay' if auto_pay_active else '🛡️ Safe Review'}` (Budget: `{budget_txt}`)\n"
     plan_text += "👇 *Ready to build this cart on Wolt?*"
@@ -2156,7 +2169,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             updated_cart = list(cart_dict.items())
             user_pending_plans[user_id] = updated_cart
             
-            summary_lines = "\n".join([f"• `{name}` × {qty}" for name, qty in updated_cart])
+            summary_lines = "\n".join([f"• {describe_cart_item(name, qty)}" for name, qty in updated_cart])
             confirm_msg = (
                 "✅ *Guest Portions Added to Your Wolt Order!*\n\n"
                 "Your weekly shopping cart has been merged into a single order with extra guest portions:\n\n"
