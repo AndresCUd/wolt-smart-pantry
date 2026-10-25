@@ -1021,10 +1021,11 @@ def describe_cart_item(est_name: str, qty: int = 1, custom_label: str = None) ->
 
     if pkg_g:
         total_g = pkg_g * qty
+        u_plural = unit_desc if unit_desc.endswith("s") else f"{unit_desc}s"
         if qty == 1:
             return f"*{total_g}g of {clean_cut}* (1 {unit_desc} × {pkg_g}g) — `{est_name}`"
         else:
-            return f"*{total_g}g of {clean_cut}* ({qty} {unit_desc}s × {pkg_g}g) — `{est_name}`"
+            return f"*{total_g}g of {clean_cut}* ({qty} {u_plural} × {pkg_g}g) — `{est_name}`"
     else:
         unit_plural = f"{qty} {unit_desc}s" if (qty > 1 and not unit_desc.endswith("s")) else f"{qty} {unit_desc}"
         return f"*{clean_cut}* × *{unit_plural}* — `{est_name}`"

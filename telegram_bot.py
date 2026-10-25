@@ -17,6 +17,13 @@ import socket
 from datetime import datetime
 from dotenv import load_dotenv
 
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # Load environment variables
 load_dotenv()
 
@@ -418,6 +425,22 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
         keyboard = [
             [InlineKeyboardButton("📦 View Pantry Inventory", callback_data="btn_pantry")],
             [InlineKeyboardButton("🌅 View Today's Menu", callback_data="btn_today_menu")]
+        ]
+        return response_text, InlineKeyboardMarkup(keyboard)
+
+    # 3.5. If zero items were added and cart total is 0.00 €, report failure honestly instead of false success
+    if not added and final_p <= 0.0:
+        response_text = (
+            "⚠️ *No Items Were Added to Your Wolt Cart*\n\n"
+            f"{failed_txt}"
+            "Possible causes:\n"
+            "• The requested products are currently out of stock at this Wolt venue.\n"
+            "• Or your Wolt browser session needs re-authentication (`/wolt`)."
+        )
+        keyboard = [
+            [InlineKeyboardButton("🔄 Retry Building Cart", callback_data="btn_confirm_cart")],
+            [InlineKeyboardButton("🛒 View / Edit Staged Cart", callback_data="btn_view_staged_cart")],
+            [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)]
         ]
         return response_text, InlineKeyboardMarkup(keyboard)
 

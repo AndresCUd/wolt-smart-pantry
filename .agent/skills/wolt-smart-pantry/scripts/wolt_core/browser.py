@@ -10,7 +10,34 @@ import sys
 import time
 import json
 import re
+import logging
+import builtins
 from playwright.sync_api import sync_playwright
+
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+_browser_logger = logging.getLogger("WoltBrowser")
+
+def print(*args, **kwargs):
+    """UTF-8 safe print wrapper that also logs to WoltBrowser logger and never raises UnicodeEncodeError."""
+    msg = " ".join(str(a) for a in args)
+    if msg.strip():
+        _browser_logger.info(msg.strip())
+    try:
+        builtins.print(*args, **kwargs)
+    except UnicodeEncodeError:
+        try:
+            safe_msg = msg.encode("ascii", errors="replace").decode("ascii")
+            builtins.print(safe_msg, **kwargs)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 from .config import (
     get_user_browser_dir,
@@ -121,19 +148,19 @@ def clear_cart(page) -> bool:
         # 3. If no bulk clear button found, remove items individually
         if not cleared:
             remove_btns = page.locator(
-                "button[aria-label*='Remove'], button[aria-label*='Eemalda'], button[data-test-id*='remove'], button[data-test-id*='delete-item'], button:has-text('Remove')"
+                "button[data-test-id='CartItemStepperClear'], button[aria-label*='Remove'], button[aria-label*='Eemalda'], button[data-test-id*='remove'], button[data-test-id*='delete-item'], button:has-text('Remove')"
             ).all()
             for r_btn in remove_btns:
                 try:
                     if r_btn.is_visible(timeout=300):
                         click_element_safely(r_btn)
-                        time.sleep(0.3)
+                        time.sleep(0.35)
                 except Exception:
                     pass
                     
         page.keyboard.press("Escape")
         time.sleep(0.5)
-        close_any_unwanted_modal(page)
+        close_any_unwanted_modal(page, discard_saved_cart=True)
         
         now = get_cart_total_price(page)
         if now == 0.0:
@@ -150,29 +177,40 @@ def clear_cart(page) -> bool:
             pass
         return False
 
-def close_any_unwanted_modal(page, target_address=None):
+def close_any_unwanted_modal(page, target_address=None, discard_saved_cart=False):
     """Dismisses interrupting modals (continue order prompts, address edit popups, cookies)."""
     try:
-        # 1. Handle 'Continue previous order' / 'Restore cart' prompt -> Discard to avoid duplicate items
+        # 1. Handle 'Continue previous order' / 'Restore cart' prompt
         continue_dialog = page.locator(
-            "dialog:has-text('continue'), [role='dialog']:has-text('continue'), dialog:has-text('jätka'), [role='dialog']:has-text('jätka'), dialog:has-text('previous'), [role='dialog']:has-text('previous'), dialog:has-text('basket'), [role='dialog']:has-text('basket')"
+            "dialog:has-text('continue'), [role='dialog']:has-text('continue'), dialog:has-text('jätka'), [role='dialog']:has-text('jätka'), dialog:has-text('previous'), [role='dialog']:has-text('previous'), dialog:has-text('basket'), [role='dialog']:has-text('basket'), dialog:has-text('saved for this store'), [role='dialog']:has-text('saved for this store')"
         ).first
         if continue_dialog.is_visible(timeout=150):
             dialog_txt = (continue_dialog.inner_text() or "").lower()
-            if any(w in dialog_txt for w in ["continue", "jätka", "previous", "restore", "pooleli", "left off"]):
-                print("    -> [🗑️] 'Continue previous order' dialog detected. Selecting 'Discard / Start new' to prevent duplicate items...")
-                no_btns = continue_dialog.locator(
-                    "button:has-text('Start new'), button:has-text('Clear'), button:has-text('Discard'), button:has-text('No'), button:has-text('Ei'), button:has-text('Tühjenda'), button:has-text('Alusta uut'), button:has-text('Tühista')"
-                ).all()
-                if no_btns and click_element_safely(no_btns[0]):
-                    time.sleep(0.8)
+            if any(w in dialog_txt for w in ["continue", "jätka", "previous", "restore", "pooleli", "left off", "saved for this store"]):
+                if discard_saved_cart:
+                    print("    -> [🗑️] 'Continue previous order' dialog detected at start. Selecting 'Discard / Start new'...")
+                    no_btns = continue_dialog.locator(
+                        "button:has-text('Start new'), button:has-text('Clear'), button:has-text('Discard'), button:has-text('No'), button:has-text('Ei'), button:has-text('Tühjenda'), button:has-text('Alusta uut'), button:has-text('Tühista')"
+                    ).all()
+                    if no_btns and click_element_safely(no_btns[0]):
+                        time.sleep(0.8)
+                    else:
+                        close_btn = continue_dialog.locator("button[aria-label*='Close'], button[aria-label*='Sulge']").first
+                        if close_btn.is_visible(timeout=150):
+                            click_element_safely(close_btn)
+                        else:
+                            page.keyboard.press("Escape")
+                        time.sleep(0.4)
                 else:
-                    close_btn = continue_dialog.locator("button[aria-label*='Close'], button[aria-label*='Sulge']").first
-                    if close_btn.is_visible(timeout=150):
-                        click_element_safely(close_btn)
+                    print("    -> [🔄] 'Continue previous order' dialog detected while keeping cart. Selecting 'Yes / Continue'...")
+                    yes_btns = continue_dialog.locator(
+                        "button:has-text('Yes'), button:has-text('Continue'), button:has-text('Jah'), button:has-text('Jätka')"
+                    ).all()
+                    if yes_btns and click_element_safely(yes_btns[0]):
+                        time.sleep(0.8)
                     else:
                         page.keyboard.press("Escape")
-                    time.sleep(0.4)
+                        time.sleep(0.4)
 
         # 2. Auto-close accidental 'Edit address' modals
         edit_dialog = page.locator(
@@ -327,23 +365,32 @@ def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "
     if any(w in q for w in ["veisehakkliha", "beef mince", "carne molida de res", "veise"]):
         if any(bad in t for bad in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "maks", "pasteet"]):
             return False, False, "Embutido o producto procesado descartado"
-        if "veise" in t or "veis" in t or "kodune" in t:
+        if any(good in t for good in ["veise", "veis", "kodune", "beef mince", "minced beef"]):
             return True, False, "Coincidencia exacta: Carne molida de res/mixta"
-        if "seahakkliha" in t or "hakkliha" in t:
-            return False, True, "Sustituto detectado: Carne molida de cerdo en vez de res"
+        if any(sub in t for sub in ["seahakkliha", "hakkliha", "minced meat", "mince"]):
+            return False, True, "Sustituto detectado: Carne molida de cerdo/mixta en vez de res"
 
-    if "hakkliha" in q:
-        if any(bad in t for bad in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "maks", "pasteet"]):
+    if "hakkliha" in q or "mince" in q:
+        if any(bad in t for bad in ["doktor", "keeduvorst", "vorst", "viiner", "sink", "pasteet"]):
             return False, False, "Embutido descartado"
-        if "hakkliha" in t:
+        if any(good in t for good in ["hakkliha", "minced meat", "beef mince", "mince"]):
             return True, False, "Coincidencia exacta: Carne molida"
 
     # 3. Poultry (Kana / Broiler / Filee)
     if any(w in q for w in ["broileri", "kanafilee", "rinnafilee", "chicken breast", "pechuga"]):
         if any(bad in t for bad in ["tiivad", "tiib", "poolkoivad", "koib", "maks", "kintsuliha", "hakkliha", "viiner", "vorst"]):
             return False, True, "Sustituto detectado: Corte diferente de pollo (alas/piernas/embutido)"
-        if any(good in t for good in ["filee", "rinnafilee", "kanafilee", "maisikattega"]):
+        if any(good in t for good in ["filee", "rinnafilee", "kanafilee", "maisikattega", "chicken breast", "chicken fillet"]):
             return True, False, "Coincidencia exacta: Filete de pechuga de pollo"
+
+    # 3b. Pork Cuts (Seakaelakarbonaad / Sealiha / Pork neck)
+    if any(w in q for w in ["seakaelakarbonaad", "kaelakarbonaad", "pork neck", "pork chop", "sealiha"]):
+        if any(bad in t for bad in ["vorst", "viiner", "sink", "pasteet", "sült", "seafood", "kala", "fish"]):
+            return False, False, "Producto procesado o marisco descartado"
+        if any(good in t for good in ["kaelakarbonaad", "pork neck", "neck chop", "karbonaad"]):
+            return True, False, "Coincidencia exacta: Chuleta/aguja de cerdo (Pork neck chop)"
+        if any(sub in t for sub in ["pork", "sealiha", "grill-liha", "sisefilee", "välisfilee"]):
+            return False, True, "Sustituto detectado: Otro corte de cerdo"
 
     # 4. Eggs (Munad / Kanamunad)
     if any(w in q for w in ["muna", "munad", "egg"]):
@@ -357,44 +404,78 @@ def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "
 
     # 6. General Word Match
     q_words = [w for w in re.findall(r'[a-zõäöü]+', clean_q) if len(w) > 2]
+    t_words = set(re.findall(r'[a-zõäöü]+', t))
     if q_words:
-        matches = [w for w in q_words if w in t]
+        # Match full words or compound words containing words of >= 4 chars (preventing 'sea' -> 'seafood')
+        matches = [
+            w for w in q_words
+            if w in t_words or (len(w) >= 4 and w in t)
+        ]
         if len(matches) == len(q_words):
             return True, False, "Coincidencia exacta en todas las palabras clave"
         elif len(matches) > 0:
             return True, False, f"Coincidencia parcial: {', '.join(matches)}"
             
-    if any(w in t for w in q_words):
+    if any(w in t_words for w in q_words):
         return False, True, f"Posible sustituto: '{card_title}'"
 
     return False, False, f"Sin coincidencia para '{query_text}'"
 
+def _build_wolt_search_queries(query_text: str) -> list[str]:
+    """
+    Generates ordered search terms for Wolt's in-store search bar by stripping package weights
+    (e.g. '400g', '500g', '10tk') that break Wolt's search index, plus core product noun fallbacks.
+    """
+    clean = re.sub(r'\b\d+(?:[.,]\d+)?\s*(?:kg|g|tk|ml|l|pk|pack|karbis)\b', '', query_text, flags=re.IGNORECASE)
+    clean = re.sub(r'\b(?:size\s*)?(?:l|m|xl)\b', '', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'\s+', ' ', clean).strip(" ,.-")
+    if not clean:
+        clean = query_text.strip()
+
+    candidates = [clean]
+    low = clean.lower()
+
+    # Specific Estonian/English store keyword fallbacks if full brand/cut name isn't in stock
+    _FALLBACK_SYNONYMS = [
+        ("seakaelakarbonaad", ["pork neck", "sea", "kaelakarbonaad", "sealiha"]),
+        ("sea sisefilee", ["pork tenderloin", "sisefilee", "sealiha"]),
+        ("sea välisfilee", ["pork loin", "välisfilee", "sealiha"]),
+        ("broilerifilee", ["broilerifilee", "kanafilee", "rinnafilee", "chicken breast"]),
+        ("toorsuitsupeekon", ["peekon", "bacon", "suitspeekon"]),
+        ("veisehakkliha", ["veisehakkliha", "beef mince", "hakkliha"]),
+        ("kodune hakkliha", ["hakkliha", "minced meat"]),
+        ("munad", ["munad", "muna", "eggs"]),
+        ("muna", ["munad", "muna", "eggs"]),
+        ("mugulsibul", ["sibul", "kollane sibul", "onion"]),
+        ("kollane sibul", ["sibul", "mugulsibul", "onion"]),
+        ("kohvikapslid", ["Dolce Gusto", "kohvikapslid", "kapslid"]),
+    ]
+    for key, syns in _FALLBACK_SYNONYMS:
+        if key in low:
+            for s in syns:
+                if s.lower() not in [c.lower() for c in candidates]:
+                    candidates.append(s)
+
+    words = [w for w in clean.split() if len(w) > 3]
+    if len(words) > 1 and words[-1].lower() not in [c.lower() for c in candidates]:
+        candidates.append(words[-1])
+
+    return candidates
+
 def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
     """Searches for an item, verifies exact match vs substitute, and adds exact match to the cart."""
     initial_cart_price = get_cart_total_price(page)
-    close_any_unwanted_modal(page)
+    close_any_unwanted_modal(page, discard_saved_cart=False)
     
     store_search_input = get_store_search_input(page)
     if not store_search_input:
-        close_any_unwanted_modal(page)
+        close_any_unwanted_modal(page, discard_saved_cart=False)
         store_search_input = get_store_search_input(page)
 
     if not store_search_input:
         print(f"    -> ⚠️ Could not find venue search box for query: {query_text}")
         return {"status": "error", "requested": query_text, "error": "Search box not found"}
     
-    try:
-        click_element_safely(store_search_input)
-        store_search_input.fill("")
-        store_search_input.press_sequentially(query_text, delay=30)
-        store_search_input.press("Enter")
-    except Exception as e:
-        print(f"    -> ⚠️ Error typing into search box: {e}")
-        return {"status": "error", "requested": query_text, "error": str(e)}
-    
-    time.sleep(2.5)
-    close_any_unwanted_modal(page)
-
     product_card_selectors = [
         "main [data-test-id*='horizontal-item-card']",
         "main [data-test-id*='vertical-item-card']",
@@ -416,36 +497,61 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
     sub_reason = ""
     exact_price = ""
 
-    for selector in product_card_selectors:
+    search_candidates = _build_wolt_search_queries(query_text)
+    for attempt_idx, search_term in enumerate(search_candidates):
         try:
-            elements = page.locator(selector).all()
-            for el in elements:
-                if el.is_visible(timeout=150):
-                    txt = el.inner_text() or ""
-                    if any(bad in txt for bad in ["Discover", "W+ Weeks", "Deals", "Halloween", "Everyday Low Prices", "Fight Food Waste", "Categories"]):
-                        continue
-                    
-                    card_title = extract_product_card_title(el, txt)
-                    
-                    prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
-                    c_price = (prices[0][0] or prices[0][1]) + " €" if prices else ""
-                    
-                    is_exact, is_sub, match_reason = validate_item_match(query_text, card_title, txt)
-                    
-                    if is_exact and not detected_exact_card:
-                        detected_exact_card = el
-                        exact_title = card_title
-                        exact_price = c_price
-                        break
-                    elif is_sub and not detected_sub_card:
-                        detected_sub_card = el
-                        sub_title = card_title
-                        sub_price = c_price
-                        sub_reason = match_reason
-            if detected_exact_card:
-                break
-        except Exception:
+            store_search_input = get_store_search_input(page) or store_search_input
+            click_element_safely(store_search_input)
+            store_search_input.fill("")
+            store_search_input.press_sequentially(search_term, delay=25)
+            store_search_input.press("Enter")
+        except Exception as e:
+            if attempt_idx == 0:
+                print(f"    -> ⚠️ Error typing into search box: {e}")
+                return {"status": "error", "requested": query_text, "error": str(e)}
             continue
+        
+        time.sleep(2.4)
+        close_any_unwanted_modal(page, discard_saved_cart=False)
+
+        for selector in product_card_selectors:
+            try:
+                elements = page.locator(selector).all()
+                for el in elements:
+                    if el.is_visible(timeout=150):
+                        txt = el.inner_text() or ""
+                        if "€" not in txt:
+                            continue
+                        if any(bad in txt for bad in ["Discover", "W+ Weeks", "Deals", "Halloween", "Everyday Low Prices", "Fight Food Waste", "Categories", "Fish & Seafood", "Meat & Poultry"]):
+                            continue
+                        
+                        card_title = extract_product_card_title(el, txt)
+                        
+                        prices = re.findall(r'(\d+[.,]\d{2})\s*€|€\s*(\d+[.,]\d{2})', txt)
+                        c_price = (prices[0][0] or prices[0][1]) + " €" if prices else ""
+                        if not c_price:
+                            continue
+                        
+                        is_exact, is_sub, match_reason = validate_item_match(query_text, card_title, txt)
+                        if not is_exact and not is_sub and search_term != query_text:
+                            is_exact, is_sub, match_reason = validate_item_match(search_term, card_title, txt)
+                        
+                        if is_exact and not detected_exact_card:
+                            detected_exact_card = el
+                            exact_title = card_title
+                            exact_price = c_price
+                            break
+                        elif is_sub and not detected_sub_card:
+                            detected_sub_card = el
+                            sub_title = card_title
+                            sub_price = c_price
+                            sub_reason = match_reason
+                if detected_exact_card:
+                    break
+            except Exception:
+                continue
+        if detected_exact_card:
+            break
 
     card_to_add = detected_exact_card
     chosen_title = exact_title
@@ -501,7 +607,7 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
             if click_element_safely(modal_submit):
                 time.sleep(1.2)
                 price_now = get_cart_total_price(page)
-                if price_now > initial_cart_price or price_now > 0:
+                if price_now > initial_cart_price:
                     return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
             else:
                 close_any_unwanted_modal(page)
@@ -516,11 +622,11 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
                 time.sleep(0.6)
             time.sleep(1.0)
             price_now = get_cart_total_price(page)
-            if price_now > initial_cart_price or price_now > 0:
+            if price_now > initial_cart_price:
                 return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
 
     price_final = get_cart_total_price(page)
-    if price_final > initial_cart_price or price_final > 0:
+    if price_final > initial_cart_price:
         return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
     return {"status": "not_found", "requested": query_text, "qty": target_qty}
 
@@ -570,9 +676,9 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         store_url = f"https://wolt.com/en/{country}/{city}/venue/{store_slug}"
         print(f"[*] Navigating to: {store_url}")
         page.goto(store_url, wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3.0)
+        time.sleep(3.5)
         
-        close_any_unwanted_modal(page, target_address=address)
+        close_any_unwanted_modal(page, target_address=address, discard_saved_cart=clear_existing_cart)
 
         current_cart_total = get_cart_total_price(page)
         if current_cart_total > 0 and clear_existing_cart:
@@ -611,7 +717,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
 
             print(f"[{idx}/{len(items)}] 🔍 Searching: '{item_name}' (x{item_qty})...")
             try:
-                close_any_unwanted_modal(page, target_address=address)
+                close_any_unwanted_modal(page, target_address=address, discard_saved_cart=False)
                 prev_price = get_cart_total_price(page)
                 
                 item_res = search_and_add_item(page, item_name, target_qty=item_qty, allow_substitute=allow_substitutes)
@@ -658,7 +764,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                     clear_btn = page.locator("main button[aria-label*='Clear'], main button[aria-label*='Tühjenda'], main button:has-text('Clear')").first
                     if clear_btn.is_visible(timeout=200):
                         click_element_safely(clear_btn)
-                    elif search_inp.is_visible(timeout=200):
+                    elif search_inp and search_inp.is_visible(timeout=200):
                         search_inp.fill("")
                 except Exception:
                     pass
@@ -666,20 +772,35 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
 
             except Exception as e:
                 print(f"    -> ⚠️ [ERROR] {e}")
+                failed_items.append({"query": item_name, "qty": item_qty})
         
         print("\n" + "="*60)
         final_price = get_cart_total_price(page)
         print(f"🎉 Completed: {added_count}/{len(items)} items processed. (Pending substitutes: {len(pending_substitutions)}). Final Cart Total: {final_price:.2f} €")
         print("="*60)
         
-        try:
-            view_order_btn = page.locator("button:has-text('View order'), button:has-text('Vaata tellimust'), button[aria-label*='View order']").first
-            if view_order_btn.is_visible(timeout=2000):
-                click_element_safely(view_order_btn)
-                print("[+] Order review opened.")
-                time.sleep(1.5)
-        except Exception:
-            pass
+        # Explicitly trigger Wolt Cloud Basket Sync (POST /order-xp/v1/baskets) by opening Cart Drawer & Next Step
+        cloud_synced = False
+        if added_count > 0 or final_price > 0:
+            try:
+                close_any_unwanted_modal(page, target_address=address, discard_saved_cart=False)
+                view_order_btn = page.locator(
+                    "button[data-test-id*='cart-view-button'], button[data-test-id*='view-order'], button:has-text('View order'), button:has-text('Vaata tellimust'), button[aria-label*='View order']"
+                ).first
+                if view_order_btn.is_visible(timeout=2500):
+                    click_element_safely(view_order_btn)
+                    print("[+] Order review drawer opened — syncing basket to Wolt Cloud (order-xp/v1/baskets)...")
+                    time.sleep(2.5)
+                    cloud_synced = True
+                    next_step_btn = page.locator(
+                        "button[data-test-id='CartViewNextStepButton'], button[data-test-id*='checkout-button'], button:has-text('Go to checkout'), button:has-text('Mine kassasse')"
+                    ).first
+                    if next_step_btn.is_visible(timeout=2000):
+                        click_element_safely(next_step_btn)
+                        print("[+] Navigated to checkout review screen to commit cloud basket sync...")
+                        time.sleep(2.8)
+            except Exception as e:
+                print(f"[!] Warning during cloud basket sync: {e}")
 
         if auto_pay and not pending_substitutions:
             if budget and final_price > budget:
@@ -695,7 +816,7 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                 print("!"*60 + "\n")
                 try:
                     checkout_btn = page.locator(
-                        "button:has-text('Go to checkout'), button:has-text('Mine kassasse'), button:has-text('Jätka'), button[data-test-id*='checkout-button'], button:has-text('Checkout')"
+                        "button[data-test-id='CartViewNextStepButton'], button:has-text('Go to checkout'), button:has-text('Mine kassasse'), button:has-text('Jätka'), button[data-test-id*='checkout-button'], button:has-text('Checkout')"
                     ).first
                     if checkout_btn.is_visible(timeout=3000):
                         click_element_safely(checkout_btn)
