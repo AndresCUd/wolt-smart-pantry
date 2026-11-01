@@ -475,6 +475,7 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
     return response_text, InlineKeyboardMarkup(keyboard)
 
 user_pending_labels = {}
+user_last_executed_cart = {}
 
 def format_staged_cart_message(user_id: int, transcript: str = None, summary_note: str = None):
     """Formats the currently staged shopping cart with interactive buttons to build on Wolt, add more via voice/text, or clear."""
@@ -1364,6 +1365,11 @@ async def _execute_staged_cart_now(update: Update, context: ContextTypes.DEFAULT
             progress_callback=progress_cb
         )
         response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
+        if res.get("items_added", 0) > 0:
+            user_last_executed_cart[user_id] = list(items)
+            if not res.get("pending_substitutions"):
+                user_pending_plans[user_id] = []
+                user_pending_labels[user_id] = {}
         if status_msg:
             await edit_safe(status_msg, response_text, reply_markup=reply_markup)
         else:
@@ -2112,6 +2118,11 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 progress_callback=progress_cb
             )
             response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
+            if res.get("items_added", 0) > 0:
+                user_last_executed_cart[user_id] = list(items)
+                if not res.get("pending_substitutions"):
+                    user_pending_plans[user_id] = []
+                    user_pending_labels[user_id] = {}
             if query.message:
                 await edit_safe(query.message, response_text, reply_markup=reply_markup)
             else:
@@ -2144,6 +2155,11 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 progress_callback=progress_cb
             )
             response_text, reply_markup = format_cart_result_message(res, store, city, country, user_id)
+            if res.get("items_added", 0) > 0:
+                user_last_executed_cart[user_id] = list(items)
+                if not res.get("pending_substitutions"):
+                    user_pending_plans[user_id] = []
+                    user_pending_labels[user_id] = {}
             if query.message:
                 await edit_safe(query.message, response_text, reply_markup=reply_markup)
             else:
@@ -2297,7 +2313,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         else:
             await query_edit_safe(query, "🔄 Generated fresh meal plan variation.")
     elif data == "btn_record_last":
-        items = user_pending_plans.get(user_id, SAMPLE_WEEKLY_GROCERY_LIST)
+        items = user_last_executed_cart.get(user_id) or user_pending_plans.get(user_id) or SAMPLE_WEEKLY_GROCERY_LIST
         record_purchase_in_memory(items, store_slug=store, user_id=user_id)
         new_plan = generate_weekly_meal_plan(inventory_items=items, prefs=load_user_preferences(user_id=user_id), user_id=user_id)
         save_meal_plan(new_plan, user_id=user_id)

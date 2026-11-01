@@ -493,14 +493,14 @@ def _build_wolt_search_queries(query_text: str) -> list[str]:
 
     return candidates
 
-def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
+def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False, discard_saved_cart=False):
     """Searches for an item, verifies exact match vs substitute, and adds exact match to the cart."""
     initial_cart_price = get_cart_total_price(page)
-    close_any_unwanted_modal(page, discard_saved_cart=False)
+    close_any_unwanted_modal(page, discard_saved_cart=discard_saved_cart)
     
     store_search_input = get_store_search_input(page)
     if not store_search_input:
-        close_any_unwanted_modal(page, discard_saved_cart=False)
+        close_any_unwanted_modal(page, discard_saved_cart=discard_saved_cart)
         store_search_input = get_store_search_input(page)
 
     if not store_search_input:
@@ -543,7 +543,7 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
             continue
         
         time.sleep(2.4)
-        close_any_unwanted_modal(page, discard_saved_cart=False)
+        close_any_unwanted_modal(page, discard_saved_cart=discard_saved_cart)
 
         for selector in product_card_selectors:
             try:
@@ -641,7 +641,7 @@ def search_and_add_item(page, query_text, target_qty=1, allow_substitute=False):
                 if price_now > initial_cart_price:
                     return {"status": "added", "title": chosen_title, "qty": target_qty, "price": exact_price}
             else:
-                close_any_unwanted_modal(page)
+                close_any_unwanted_modal(page, discard_saved_cart=discard_saved_cart)
 
     if not modal_opened:
         plus_btn = card_to_add.locator(
@@ -748,10 +748,14 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
 
             print(f"[{idx}/{len(items)}] 🔍 Searching: '{item_name}' (x{item_qty})...")
             try:
-                close_any_unwanted_modal(page, target_address=address, discard_saved_cart=False)
+                should_discard_saved = bool(clear_existing_cart and added_count == 0)
+                close_any_unwanted_modal(page, target_address=address, discard_saved_cart=should_discard_saved)
                 prev_price = get_cart_total_price(page)
+                if prev_price > 0 and should_discard_saved and not cart_was_cleared:
+                    cart_was_cleared = clear_cart(page)
+                    prev_price = get_cart_total_price(page)
                 
-                item_res = search_and_add_item(page, item_name, target_qty=item_qty, allow_substitute=allow_substitutes)
+                item_res = search_and_add_item(page, item_name, target_qty=item_qty, allow_substitute=allow_substitutes, discard_saved_cart=should_discard_saved)
 
                 if isinstance(item_res, dict):
                     st = item_res.get("status")
