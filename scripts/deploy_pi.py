@@ -1,10 +1,13 @@
 """
 Raspberry Pi Deployment & Remote Management Helper
-Allows 1-command deployment, synchronization, log checking, and service restarting over SSH.
+Allows 1-command deployment, cross-OS Wolt session synchronization (decrypted cookies + localStorage),
+log checking, and service restarting over SSH.
 """
 
 import os
 import sys
+import json
+import time
 import subprocess
 import argparse
 
@@ -13,9 +16,17 @@ DEFAULT_USER = os.getenv("RPI_USER", "andres")
 REMOTE_DIR = os.getenv("RPI_DIR", "/home/andres/wolt-smart-pantry")
 SERVICE_NAME = "wolt-bot"
 
-def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER, allocate_tty=True):
+def _get_ssh_key_args():
+    for key_name in ["hetzner_automation_key", "id_ed25519", "id_rsa"]:
+        kp = os.path.expanduser(f"~/.ssh/{key_name}")
+        if os.path.exists(kp):
+            return ["-i", kp]
+    return []
+
+def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER, allocate_tty=False):
     target = f"{user}@{host}"
-    ssh_cmd = ["ssh", "-o", "ConnectTimeout=15"]
+    ssh_cmd = ["ssh", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=no"]
+    ssh_cmd.extend(_get_ssh_key_args())
     if allocate_tty:
         ssh_cmd.append("-tt")
     ssh_cmd.extend([target, cmd])
@@ -24,11 +35,13 @@ def run_ssh(cmd, host=DEFAULT_HOST, user=DEFAULT_USER, allocate_tty=True):
     return res.returncode
 
 def copy_ssh_key(host=DEFAULT_HOST, user=DEFAULT_USER):
-    pubkey_path = os.path.expanduser("~/.ssh/id_ed25519.pub")
+    pubkey_path = os.path.expanduser("~/.ssh/hetzner_automation_key.pub")
+    if not os.path.exists(pubkey_path):
+        pubkey_path = os.path.expanduser("~/.ssh/id_ed25519.pub")
     if not os.path.exists(pubkey_path):
         pubkey_path = os.path.expanduser("~/.ssh/id_rsa.pub")
     if not os.path.exists(pubkey_path):
-        print("[!] No public SSH key found in ~/.ssh/ (checked id_ed25519.pub and id_rsa.pub)")
+        print("[!] No public SSH key found in ~/.ssh/")
         return 1
 
     with open(pubkey_path, "r", encoding="utf-8") as f:
@@ -45,7 +58,7 @@ def setup_sudo(host=DEFAULT_HOST, user=DEFAULT_USER):
     print(f"[*] Configuring passwordless sudo for '{SERVICE_NAME}' service on {target}...")
     rule = f"{user} ALL=(ALL) NOPASSWD: /bin/systemctl restart {SERVICE_NAME}, /bin/systemctl is-active {SERVICE_NAME}, /bin/systemctl status {SERVICE_NAME}, /bin/systemctl start {SERVICE_NAME}, /bin/systemctl stop {SERVICE_NAME}, /usr/bin/systemctl restart {SERVICE_NAME}, /usr/bin/systemctl is-active {SERVICE_NAME}, /usr/bin/systemctl status {SERVICE_NAME}"
     cmd = f"echo '{rule}' | sudo tee /etc/sudoers.d/{SERVICE_NAME} && sudo chmod 440 /etc/sudoers.d/{SERVICE_NAME}"
-    return run_ssh(cmd, host=host, user=user)
+    return run_ssh(cmd, host=host, user=user, allocate_tty=True)
 
 def deploy(host=DEFAULT_HOST, user=DEFAULT_USER, remote_dir=REMOTE_DIR):
     target = f"{user}@{host}"
@@ -68,32 +81,117 @@ def logs(host=DEFAULT_HOST, user=DEFAULT_USER, lines=30):
     return run_ssh(logs_cmd, host=host, user=user)
 
 def sync_profile(user_id=None, host=DEFAULT_HOST, user=DEFAULT_USER, remote_dir=REMOTE_DIR):
-    """Syncs the authenticated Wolt browser profile from PC to Raspberry Pi over SCP."""
+    """
+    Exports decrypted Wolt cookies & localStorage from local PC Chromium profile via Playwright
+    and imports them directly into the Raspberry Pi's Chromium profile (solving Windows DPAPI vs Linux cookie encryption).
+    """
+    from playwright.sync_api import sync_playwright
+
     if user_id:
-        local_profile = os.path.join("data", "users", str(user_id), ".wolt_profile")
-        remote_target_dir = f"{remote_dir}/data/users/{user_id}"
+        local_profile = os.path.abspath(os.path.join("data", "users", str(user_id), ".wolt_profile"))
+        remote_profile = f"{remote_dir}/data/users/{user_id}/.wolt_profile"
     else:
-        local_profile = ".wolt_profile"
-        remote_target_dir = remote_dir
+        local_profile = os.path.abspath(".wolt_profile")
+        remote_profile = f"{remote_dir}/.wolt_profile"
 
     if not os.path.exists(local_profile):
         print(f"[!] Local profile directory not found at: {local_profile}")
         print("    Run 'python wolt_manager.py login" + (f" --user {user_id}'" if user_id else "'") + " first on your PC.")
         return 1
 
-    print(f"[*] Preparing remote directory on {user}@{host}:{remote_target_dir}...")
-    run_ssh(f"mkdir -p {remote_target_dir}", host=host, user=user)
+    print(f"[*] Extracting decrypted Wolt session (cookies + localStorage) from local profile: {local_profile}...")
+    os.makedirs("scratch", exist_ok=True)
+    state_file = os.path.join("scratch", "wolt_auth_state.json")
 
-    remote_dest = f"{user}@{host}:{remote_target_dir}/"
-    print(f"[*] Copying {local_profile} -> {remote_dest}...")
-    scp_cmd = ["scp", "-r", local_profile, remote_dest]
+    with sync_playwright() as p:
+        args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=local_profile,
+            headless=True,
+            args=args,
+            viewport={"width": 1280, "height": 850}
+        )
+        page = context.pages[0] if context.pages else context.new_page()
+        page.goto("https://wolt.com/en/est/tallinn/venue/wolt-market-maakri", wait_until="domcontentloaded")
+        time.sleep(3.5)
+        cookies = context.cookies()
+        ls = page.evaluate("() => Object.assign({}, window.localStorage)")
+        context.close()
+
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump({"cookies": cookies, "localStorage": ls}, f)
+    print(f"[+] Exported {len(cookies)} decrypted cookies and {len(ls)} localStorage keys.")
+
+    importer_code = f'''import json, time, os
+from playwright.sync_api import sync_playwright
+
+profile_dir = {json.dumps(remote_profile)}
+os.makedirs(profile_dir, exist_ok=True)
+for root_dir, _, files in os.walk(profile_dir):
+    for fn in files:
+        if fn in ["LOCK", "SingletonLock", "SingletonSocket", "SingletonCookie"]:
+            try:
+                os.remove(os.path.join(root_dir, fn))
+            except Exception:
+                pass
+
+with open("wolt_auth_state.json", "r", encoding="utf-8") as f:
+    state = json.load(f)
+
+with sync_playwright() as p:
+    args = ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+    context = p.chromium.launch_persistent_context(
+        user_data_dir=profile_dir,
+        headless=True,
+        args=args,
+        viewport={{"width": 1280, "height": 850}}
+    )
+    page = context.pages[0] if context.pages else context.new_page()
+    context.clear_cookies()
+    valid_cookies = []
+    for c in state.get("cookies", []):
+        c_copy = dict(c)
+        if c_copy.get("sameSite") not in ("Strict", "Lax", "None"):
+            c_copy.pop("sameSite", None)
+        valid_cookies.append(c_copy)
+    context.add_cookies(valid_cookies)
+    page.goto("https://wolt.com/en/est/tallinn/venue/wolt-market-maakri", wait_until="commit")
+    time.sleep(2.5)
+    page.evaluate(
+        """(items) => {{
+            for (const [k, v] of Object.entries(items)) {{
+                try {{ window.localStorage.setItem(k, v); }} catch (e) {{}}
+            }}
+        }}""",
+        state.get("localStorage", {{}})
+    )
+    page.reload(wait_until="commit")
+    time.sleep(3.0)
+    context.close()
+print("[+] Successfully imported decrypted Wolt session into Raspberry Pi Chromium profile!")
+'''
+    importer_file = os.path.join("scratch", "import_pi_wolt.py")
+    with open(importer_file, "w", encoding="utf-8") as f:
+        f.write(importer_code)
+
+    scp_cmd = ["scp", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=no"]
+    scp_cmd.extend(_get_ssh_key_args())
+    scp_cmd.extend([state_file, importer_file, f"{user}@{host}:{remote_dir}/"])
     res = subprocess.run(scp_cmd)
-    if res.returncode == 0:
-        print(f"[+] Wolt profile synced successfully to Raspberry Pi!")
-        print(f"[*] Restarting '{SERVICE_NAME}' service on Pi to apply active session...")
-        run_ssh(f"sudo systemctl restart {SERVICE_NAME}", host=host, user=user)
-        print("[+] Done! Check with: python scripts/deploy_pi.py logs")
-    return res.returncode
+    if res.returncode != 0:
+        return res.returncode
+
+    rc = run_ssh(
+        f"pkill -f chromium || true; cd {remote_dir} && ./venv/bin/python -u import_pi_wolt.py && rm -f wolt_auth_state.json import_pi_wolt.py && sudo systemctl restart {SERVICE_NAME}",
+        host=host,
+        user=user
+    )
+    try:
+        os.remove(state_file)
+        os.remove(importer_file)
+    except Exception:
+        pass
+    return rc
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Raspberry Pi Deployment & SSH Manager")

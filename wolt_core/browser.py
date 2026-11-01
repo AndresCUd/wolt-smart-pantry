@@ -402,6 +402,27 @@ def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "
         if any(good in t for good in ["tosta", "röstsai", "sai", "toast", "leib"]):
             return True, False, "Coincidencia exacta: Pan tostado"
 
+    # 5b. Pasta vs Pasta Sauce (Spaghetti / Pasta vs Pastakaste)
+    if any(w in q for w in ["spaghetti", "spagetid", "penne", "fusilli", "makaronid"]):
+        if any(bad in t for bad in ["pastakaste", "kaste", "sauce", "pesto", "bolognese"]):
+            return False, False, "Salsa para pasta descartada (se solicitó pasta seca)"
+        if any(good in t for good in ["spaghetti", "spagetid", "penne", "fusilli", "pasta", "makaronid"]):
+            return True, False, "Coincidencia exacta: Pasta"
+
+    # 5c. Tuna (Tuunikala / Tuunikalatükid)
+    if any(w in q for w in ["tuunikala", "tuunikalatükid", "tuna"]):
+        if any(bad in t for bad in ["kassitoit", "koeratoit", "cat", "dog", "pet"]):
+            return False, False, "Alimento para mascotas descartado"
+        if any(good in t for good in ["tuunikala", "tuunikalatükid", "tuna"]):
+            return True, False, "Coincidencia exacta: Atún en lata"
+
+    # 5d. Brown / Raw Sugar (Roosuhkur / Panela / Pruun suhkur)
+    if any(w in q for w in ["roosuhkur", "panela", "pruun suhkur", "brown sugar"]):
+        if any(good in t for good in ["roosuhkur", "pruun", "cane sugar", "brown sugar", "demerara", "fariinsuhkur"]):
+            return True, False, "Coincidencia exacta: Azúcar morena / de caña"
+        if "suhkur" in t or "sugar" in t:
+            return False, True, "Sustituto detectado: Azúcar regular en vez de azúcar de caña/panela"
+
     # 6. General Word Match
     q_words = [w for w in re.findall(r'[a-zõäöü]+', clean_q) if len(w) > 2]
     t_words = set(re.findall(r'[a-zõäöü]+', t))
@@ -414,6 +435,10 @@ def validate_item_match(query_text: str, card_title: str, card_raw_text: str = "
         if len(matches) == len(q_words):
             return True, False, "Coincidencia exacta en todas las palabras clave"
         elif len(matches) > 0:
+            # If the query has multiple words (e.g. Brand + Product Noun like 'Barilla Spaghetti'),
+            # require the core product noun (last word) to match for an exact match; otherwise treat as substitute/non-match
+            if len(q_words) >= 2 and q_words[-1] not in matches:
+                return False, False, f"Solo coincidió marca/prefijo ({', '.join(matches)}), pero no el producto '{q_words[-1]}'"
             return True, False, f"Coincidencia parcial: {', '.join(matches)}"
             
     if any(w in t_words for w in q_words):
@@ -437,7 +462,8 @@ def _build_wolt_search_queries(query_text: str) -> list[str]:
 
     # Specific Estonian/English store keyword fallbacks if full brand/cut name isn't in stock
     _FALLBACK_SYNONYMS = [
-        ("seakaelakarbonaad", ["pork neck", "sea", "kaelakarbonaad", "sealiha"]),
+        ("seakaelakarbonaad", ["seakaelakarbonaad", "pork neck", "sea", "kaelakarbonaad", "sealiha"]),
+        ("veise välisfilee", ["välisfilee", "veise", "beef", "steik"]),
         ("sea sisefilee", ["pork tenderloin", "sisefilee", "sealiha"]),
         ("sea välisfilee", ["pork loin", "välisfilee", "sealiha"]),
         ("broilerifilee", ["broilerifilee", "kanafilee", "rinnafilee", "chicken breast"]),
@@ -449,6 +475,11 @@ def _build_wolt_search_queries(query_text: str) -> list[str]:
         ("mugulsibul", ["sibul", "kollane sibul", "onion"]),
         ("kollane sibul", ["sibul", "mugulsibul", "onion"]),
         ("kohvikapslid", ["Dolce Gusto", "kohvikapslid", "kapslid"]),
+        ("tuunikalatükid", ["tuunikala", "tuna"]),
+        ("tuunikala", ["tuunikala", "tuna"]),
+        ("panela", ["roosuhkur", "pruun suhkur", "fariinsuhkur", "suhkur"]),
+        ("roosuhkur", ["roosuhkur", "pruun suhkur", "fariinsuhkur"]),
+        ("spaghetti", ["spaghetti", "spagetid", "pasta"]),
     ]
     for key, syns in _FALLBACK_SYNONYMS:
         if key in low:
@@ -781,9 +812,21 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         
         # Explicitly trigger Wolt Cloud Basket Sync (POST /order-xp/v1/baskets) by opening Cart Drawer & Next Step
         cloud_synced = False
+        session_expired = False
         if added_count > 0 or final_price > 0:
             try:
+                basket_api_statuses = []
+                def _on_basket_resp(resp):
+                    if "order-xp" in resp.url and ("baskets" in resp.url or "checkout" in resp.url):
+                        basket_api_statuses.append((resp.request.method, resp.status, resp.url))
+                page.on("response", _on_basket_resp)
+
                 close_any_unwanted_modal(page, target_address=address, discard_saved_cart=False)
+                login_btn_check = page.locator("header button:has-text('Log in'), header button:has-text('Logi sisse'), header [data-test-id*='login']").first
+                if login_btn_check.is_visible(timeout=500):
+                    session_expired = True
+                    print("[!] WARNING: Wolt browser session is NOT logged in ('Log in' button is visible)! Cart cannot sync to mobile app.")
+
                 view_order_btn = page.locator(
                     "button[data-test-id*='cart-view-button'], button[data-test-id*='view-order'], button:has-text('View order'), button:has-text('Vaata tellimust'), button[aria-label*='View order']"
                 ).first
@@ -791,7 +834,6 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                     click_element_safely(view_order_btn)
                     print("[+] Order review drawer opened — syncing basket to Wolt Cloud (order-xp/v1/baskets)...")
                     time.sleep(2.5)
-                    cloud_synced = True
                     next_step_btn = page.locator(
                         "button[data-test-id='CartViewNextStepButton'], button[data-test-id*='checkout-button'], button:has-text('Go to checkout'), button:has-text('Mine kassasse')"
                     ).first
@@ -799,6 +841,16 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
                         click_element_safely(next_step_btn)
                         print("[+] Navigated to checkout review screen to commit cloud basket sync...")
                         time.sleep(2.8)
+
+                if any(st == 401 for _, st, _ in basket_api_statuses):
+                    session_expired = True
+                    cloud_synced = False
+                    print("[!] WARNING: Wolt API returned 401 Unauthorized for basket sync!")
+                elif any(m == "POST" and st in (200, 201) for m, st, _ in basket_api_statuses):
+                    cloud_synced = True
+                    print("[+] Confirmed HTTP 200 POST /order-xp/v1/baskets cloud sync!")
+                elif not session_expired:
+                    cloud_synced = True
             except Exception as e:
                 print(f"[!] Warning during cloud basket sync: {e}")
 
@@ -895,7 +947,9 @@ def add_items_to_cart(store_slug, items, city="tallinn", country="est", address=
         "auto_pay_attempted": auto_pay,
         "auto_pay_success": paid_successfully,
         "budget_exceeded": budget_exceeded,
-        "max_budget": budget
+        "max_budget": budget,
+        "cloud_synced": cloud_synced,
+        "session_expired": session_expired
     }
 
 def inspect_store_items(store_slug, queries=None, get_deals=False, city="tallinn", country="est", address=None, output_file=None, user_id=None, headless=None):
@@ -1072,24 +1126,23 @@ def check_wolt_session(user_id=None, headless=None) -> dict:
                 viewport={"width": 1280, "height": 850}
             )
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto("https://wolt.com/en/me", wait_until="domcontentloaded", timeout=25000)
-            time.sleep(2)
+            api_statuses = []
+            def _on_resp(resp):
+                if "order-xp" in resp.url and "baskets" in resp.url:
+                    api_statuses.append(resp.status)
+            page.on("response", _on_resp)
+            page.goto("https://wolt.com/en/est/tallinn/venue/wolt-market-maakri", wait_until="domcontentloaded", timeout=25000)
+            time.sleep(3.5)
             
-            # Wolt redirects logged-out users to /discovery. Logged-in users stay on /me
-            current_url = page.url.lower()
-            if "/me" in current_url or "/profile" in current_url or "/settings" in current_url:
+            login_btn = page.locator("button:has-text('Log in'), button:has-text('Logi sisse'), button[data-test-id*='login']").first
+            user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
+            if 401 in api_statuses or login_btn.is_visible(timeout=1000):
+                status["logged_in"] = False
+            elif any(s in (200, 404) for s in api_statuses) or user_menu.is_visible(timeout=1000):
                 status["logged_in"] = True
             else:
-                user_menu = page.locator("[data-test-id*='user-menu'], button[aria-label*='User profile'], button[aria-label*='Konto'], [data-test-id*='profile-button']").first
-                login_btn = page.locator("button:has-text('Log in'), button:has-text('Logi sisse'), button[data-test-id*='login']").first
-                if user_menu.is_visible(timeout=1500):
-                    status["logged_in"] = True
-                elif login_btn.is_visible(timeout=1500):
-                    status["logged_in"] = False
-                else:
-                    cookies = context.cookies()
-                    has_auth = any("token" in c.get("name", "").lower() or "session" in c.get("name", "").lower() or "wauth" in c.get("name", "").lower() for c in cookies)
-                    status["logged_in"] = has_auth
+                ls_tokens = page.evaluate("() => Object.keys(window.localStorage).filter(k => k.toLowerCase().includes('token') || k.toLowerCase().includes('auth') || k.toLowerCase().includes('user'))")
+                status["logged_in"] = bool(ls_tokens)
                     
             context.close()
         except Exception as e:

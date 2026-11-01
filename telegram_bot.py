@@ -444,6 +444,21 @@ def format_cart_result_message(res: dict, store: str, city: str, country: str, u
         ]
         return response_text, InlineKeyboardMarkup(keyboard)
 
+    # 3.6. If Wolt browser session is logged out / expired (401 Unauthorized), warn user explicitly
+    if res.get("session_expired"):
+        response_text = (
+            "⚠️ *Wolt Session Expired (Not Logged In)*\n\n"
+            f"{price_header}"
+            f"{items_txt}"
+            "❌ Items were added in the headless browser, but *Wolt rejected cloud sync (`401 Unauthorized`)* because the server's Wolt browser profile is not logged in.\n\n"
+            "🔑 Run `python scripts/deploy_pi.py sync-profile` from your PC (after `python wolt_manager.py login --user 7249779280`) to restore your Wolt session."
+        )
+        keyboard = [
+            [InlineKeyboardButton("🔄 Retry Building Cart", callback_data="btn_confirm_cart")],
+            [InlineKeyboardButton("📱 Open Wolt App / Web", url=wolt_url)]
+        ]
+        return response_text, InlineKeyboardMarkup(keyboard)
+
     # 4. Standard cart ready & synchronized
     response_text = (
         "🎉 *Cart Ready & Synchronized!*\n\n"
